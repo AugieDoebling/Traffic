@@ -545,6 +545,19 @@ namespace Traffic.Tools
             return count >= 2;
         }
 
+        /// <summary>
+        /// Lane connections at the selected intersection can be previewed but not modified.
+        /// Roundabouts are read-only until custom entry/exit connections are supported by the lane generator
+        /// </summary>
+        private bool IsReadOnlyIntersection()
+        {
+#if EXPERIMENTAL_ROUNDABOUTS
+            return _selectedNode != Entity.Null && EntityManager.HasComponent<Roundabout>(_selectedNode);
+#else
+            return false;
+#endif
+        }
+
         private bool IsApplyAllowed(bool useVanilla = true) {
             if (useVanilla)
             {
@@ -571,6 +584,13 @@ namespace Traffic.Tools
                 return UpdateDefinitions(inputDeps: SelectIntersectionNode(inputDeps, Entity.Null));
             }
             
+            if (ToolMode == Mode.ApplyQuickModifications && IsReadOnlyIntersection())
+            {
+                // quick modification requested from the UI, not supported at read-only intersection
+                ToolMode = Mode.Default;
+                SetActionOverlay(ModUISystem.ActionOverlayPreview.None);
+            }
+
             if (ToolMode == Mode.ApplyQuickModifications)
             {
                 return ApplyQuickModification(inputDeps);
@@ -609,9 +629,13 @@ namespace Traffic.Tools
             switch (_state)
             {
                 case State.Default:
-                    if (IsApplyAllowed(useVanilla: false) && 
+                    if (IsApplyAllowed(useVanilla: false) &&
                         GetRaycastResult(out ControlPoint cp, out bool forceUpdate) &&
+#if EXPERIMENTAL_ROUNDABOUTS
+                        !forceUpdate)
+#else
                         !forceUpdate && !EntityManager.HasComponent<Roundabout>(cp.m_OriginalEntity))
+#endif
                     {
                         Entity entity = cp.m_OriginalEntity;
                         Logger.DebugTool($"[Apply {UnityEngine.Time.frameCount}]|Default|Entity: {entity}");
@@ -624,7 +648,8 @@ namespace Traffic.Tools
                     return Update(inputDeps);
 
                 case State.SelectingSourceConnector:
-                    if (IsApplyAllowed(useVanilla: false) && 
+                    if (!IsReadOnlyIntersection() &&
+                        IsApplyAllowed(useVanilla: false) &&
                         GetCustomRaycastResult(out ControlPoint controlPointSource) &&
                         EntityManager.TryGetComponent(controlPointSource.m_OriginalEntity, out Connector sourceConnector) &&
                         sourceConnector.connectorType == ConnectorType.Source)
@@ -1038,7 +1063,7 @@ namespace Traffic.Tools
 
         private bool CheckToolboxActions(JobHandle inputDeps, out JobHandle jobHandle)
         {
-            if (_state == State.Default || ToolMode == Mode.ApplyQuickModifications)
+            if (_state == State.Default || ToolMode == Mode.ApplyQuickModifications || IsReadOnlyIntersection())
             {
                 jobHandle = new JobHandle();
                 return false;

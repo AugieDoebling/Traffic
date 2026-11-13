@@ -57,14 +57,19 @@ namespace Traffic.Rendering
                 }
                 PathNode connectorNode = new PathNode();
                 PathNode connectorNode2 = new PathNode();
+                // connectors on the roundabout ring are matched by the full lane index (lane | segment << 8)
+                bool isRingConnector = false;
+                bool isRingConnector2 = false;
                 if (connector != Entity.Null)
                 {
                     Connector c = connectorsData[connector];
                     connectorNode = new PathNode(c.edge, (ushort)c.laneIndex);
+                    isRingConnector = RoundaboutUtils.IsRingConnector(in c);
                     if (connector2 != Entity.Null && state == LaneConnectorToolSystem.State.SelectingTargetConnector && connectorsData.HasComponent(connector2))
                     {
                         Connector c2 = connectorsData[connector2];
                         connectorNode2 = new PathNode(c2.edge, (ushort)c2.laneIndex);
+                        isRingConnector2 = RoundaboutUtils.IsRingConnector(in c2);
                         previewConnection = true;
                     }
                     floatingPosition = state == LaneConnectorToolSystem.State.SelectingTargetConnector && connector != connector2; //TODO bug
@@ -121,14 +126,14 @@ namespace Traffic.Rendering
                                 dimm = connection.isUnsafe ? new Color(1f, 1f, 1f, 0.55f) : dimmMain;
                             }
 
-                            if (AreEqual(connectorNode, connection.sourceNode))
+                            if (AreEqual(connectorNode, connection.sourceNode, isRingConnector))
                             {
-                                bool isTarget = state == LaneConnectorToolSystem.State.SelectingTargetConnector && AreEqual(connectorNode2, connection.targetNode);
+                                bool isTarget = state == LaneConnectorToolSystem.State.SelectingTargetConnector && AreEqual(connectorNode2, connection.targetNode, isRingConnector2);
                                 if (isTarget)
                                 {
                                     floatingPosition = false;
                                 }
-                                color = (state == LaneConnectorToolSystem.State.SelectingSourceConnector || AreEqual(connectorNode2, connection.targetNode)) ? state == LaneConnectorToolSystem.State.SelectingTargetConnector ?
+                                color = (state == LaneConnectorToolSystem.State.SelectingSourceConnector || AreEqual(connectorNode2, connection.targetNode, isRingConnector2)) ? state == LaneConnectorToolSystem.State.SelectingTargetConnector ?
                                         new Color(1f, 0f, 0.15f, 0.9f) :
                                         connection.isForbidden ? new Color(1f, 0f, 0.15f, 0.9f) : colorSet.outlineActiveColor :
                                     connection.isForbidden ? new Color(1f, 0f, 0.15f, 0.9f) : colorSet.outlineActiveColor;
@@ -141,7 +146,7 @@ namespace Traffic.Rendering
                                 });
                                 continue;
                             }
-                            if (AreEqual(connectorNode, connection.targetNode))
+                            if (AreEqual(connectorNode, connection.targetNode, isRingConnector))
                             {
                                 color = connection.isForbidden ? new Color(1f, 0f, 0.15f, 0.9f) : new Color(0.75f, 0f, 0.34f);
                                 color2 = Color.clear;
@@ -245,9 +250,15 @@ namespace Traffic.Rendering
                     (makeUnsafe && (connection.method & (PathMethod.Road | PathMethod.Bicycle)) == 0);
             }
 
-            private bool AreEqual(PathNode node1, PathNode node2)
+            private bool AreEqual(PathNode connectorNode, PathNode laneNode, bool isRingConnector)
             {
-                return node1.OwnerEquals(node2) && (node1.GetLaneIndex() & 0xff) == (node2.GetLaneIndex() & 0xff);
+                if (!connectorNode.OwnerEquals(laneNode))
+                {
+                    return false;
+                }
+                return isRingConnector
+                    ? connectorNode.GetLaneIndex() == laneNode.GetLaneIndex()
+                    : (connectorNode.GetLaneIndex() & 0xff) == (laneNode.GetLaneIndex() & 0xff);
             }
 
             private struct ConnectionRenderData

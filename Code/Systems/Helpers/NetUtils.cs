@@ -90,6 +90,31 @@ namespace Traffic.Systems.Helpers
         }
 
         /// <summary>
+        /// Finds additional details of a single edge lane end
+        /// </summary>
+        /// <returns>true if the lane end is valid</returns>
+        public static bool GetLaneEndDetails(Entity edge, int laneIndex, bool isEdgeEnd, ref ComponentLookup<Composition> compositionData, ref BufferLookup<NetCompositionLane> compositionLanes, out float3 lanePosition,
+            out int2 carriagewayAndGroup)
+        {
+            lanePosition = float3.zero;
+            carriagewayAndGroup = new int2(-1);
+            if (edge == Entity.Null || !compositionData.HasComponent(edge))
+            {
+                return false;
+            }
+            DynamicBuffer<NetCompositionLane> netCompositionLanes = compositionLanes[compositionData[edge].m_Edge];
+            if (laneIndex < 0 || laneIndex >= netCompositionLanes.Length)
+            {
+                return false;
+            }
+            NetCompositionLane netCompositionLane = netCompositionLanes[laneIndex];
+            lanePosition = netCompositionLane.m_Position;
+            lanePosition.x = math.select(0f - netCompositionLane.m_Position.x, netCompositionLane.m_Position.x, isEdgeEnd);
+            carriagewayAndGroup = new int2(netCompositionLane.m_Carriageway, netCompositionLane.m_Group);
+            return true;
+        }
+
+        /// <summary>
         /// Finds the edge based on PathNode Owner
         /// </summary>
         /// <param name="edges">ConnectedEdge buffer</param>

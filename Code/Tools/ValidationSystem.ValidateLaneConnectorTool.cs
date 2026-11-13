@@ -295,7 +295,12 @@ namespace Traffic.Tools
                     return false;
                 }
                 
+#if EXPERIMENTAL_ROUNDABOUTS
+                // lane connections at roundabouts can be selected (read-only preview)
+                CompositionFlags.General testFlags = priorityToolActive ? (CompositionFlags.General.LevelCrossing | CompositionFlags.General.Roundabout | CompositionFlags.General.TrafficLights) : (CompositionFlags.General)0;
+#else
                 CompositionFlags.General testFlags = priorityToolActive ? (CompositionFlags.General.LevelCrossing | CompositionFlags.General.Roundabout | CompositionFlags.General.TrafficLights) : CompositionFlags.General.Roundabout;
+#endif
                 DynamicBuffer<ConnectedEdge> connectedEdges = connectedEdgesBuffer[nodeEntity];
                 for (int j = 0; j < connectedEdges.Length; j++)
                 {

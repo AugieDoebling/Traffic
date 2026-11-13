@@ -70,6 +70,7 @@ namespace Traffic.Systems.LaneConnections
                 connectedEdges = SystemAPI.GetBufferLookup<ConnectedEdge>(true),
                 subLanes = SystemAPI.GetBufferLookup<SubLane>(true),
                 prefabCompositionLanes = SystemAPI.GetBufferLookup<NetCompositionLane>(true),
+                roundaboutData = SystemAPI.GetComponentLookup<Roundabout>(true),
                 commandBuffer = commandBuffer,
             };
             Logger.Debug($"Generating (def): {_definitionQuery.CalculateEntityCount()} | chunks: {_definitionQuery.CalculateChunkCount()}");
@@ -97,6 +98,7 @@ namespace Traffic.Systems.LaneConnections
                 masterLaneData = SystemAPI.GetComponentLookup<MasterLane>(true),
                 edgeData = SystemAPI.GetComponentLookup<Edge>(true),
                 nodeData = SystemAPI.GetComponentLookup<Node>(true),
+                roundaboutData = SystemAPI.GetComponentLookup<Roundabout>(true),
                 connectedEdgesBuffer = SystemAPI.GetBufferLookup<ConnectedEdge>(true),
                 prefabCompositionLaneBuffer= SystemAPI.GetBufferLookup<NetCompositionLane>(true),
                 subLanesBuffer = SystemAPI.GetBufferLookup<SubLane>(true),
@@ -121,6 +123,9 @@ namespace Traffic.Systems.LaneConnections
             public bool isTwoWay;
             public bool isHighway;
             public VehicleGroup vehicleGroup;
+            /// <summary>lane end on the roundabout ring (owned by the node), see RoundaboutUtils</summary>
+            public bool isRing;
+            public int ringLaneIndex;
             // public ConnectionType supportedType;
         }
     }

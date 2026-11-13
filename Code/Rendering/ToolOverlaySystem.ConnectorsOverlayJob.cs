@@ -104,7 +104,12 @@ namespace Traffic.Rendering
                                 position,
                                 diameter);
                         }
+#if EXPERIMENTAL_ROUNDABOUTS
+                        // roundabouts are read-only for now, show the ring targets together with sources
+                        else if ((connector.connectorType & ConnectorType.Target) != 0 && (renderTarget || (renderSource && connector.edge == connector.node)))
+#else
                         else if ((connector.connectorType & ConnectorType.Target) != 0 && renderTarget)
+#endif
                         {
                             overlayBuffer.DrawCircle(
                                 CalculateConnectorColor(connector, false, false),

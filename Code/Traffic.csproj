@@ -16,7 +16,7 @@
 
     <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
       <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-      <DefineConstants>TRACE;SERIALIZATION;DEBUG_CONNECTIONS;DEBUG_CONNECTIONS_SYNC;DEBUG_TOOL;DEBUG_GIZMO</DefineConstants>
+      <DefineConstants>TRACE;SERIALIZATION;DEBUG_CONNECTIONS;DEBUG_CONNECTIONS_SYNC;DEBUG_TOOL;DEBUG_GIZMO;EXPERIMENTAL_ROUNDABOUTS</DefineConstants>
       <DebugType>portable</DebugType>
     </PropertyGroup>
 
@@ -161,6 +161,21 @@
         </None>
     </ItemGroup>
     
+    <!--
+      The SDK's conflict resolution drops the game's mscorlib in favour of the net48 reference assembly,
+      which lacks Span/Index/Dictionary.TryAdd. Swap the game's mscorlib back in before compiling.
+    -->
+    <Target Name="UseGameMscorlib" AfterTargets="FindReferenceAssembliesForReferences" BeforeTargets="CoreCompile" Condition="Exists('$(ManagedPath)\mscorlib.dll')">
+        <ItemGroup>
+            <_FrameworkMscorlibRef Include="@(ReferencePathWithRefAssemblies)" Condition="'%(Filename)%(Extension)' == 'mscorlib.dll'" />
+            <ReferencePathWithRefAssemblies Remove="@(_FrameworkMscorlibRef)" />
+            <ReferencePathWithRefAssemblies Include="$(ManagedPath)\mscorlib.dll" />
+            <_FrameworkMscorlibPath Include="@(ReferencePath)" Condition="'%(Filename)%(Extension)' == 'mscorlib.dll'" />
+            <ReferencePath Remove="@(_FrameworkMscorlibPath)" />
+            <ReferencePath Include="$(ManagedPath)\mscorlib.dll" />
+        </ItemGroup>
+    </Target>
+
     <Target Name="BuildUI" AfterTargets="AfterBuild">
         <Exec Command="npm run build" WorkingDirectory="$(ProjectDir)..\UI" />
     </Target>
