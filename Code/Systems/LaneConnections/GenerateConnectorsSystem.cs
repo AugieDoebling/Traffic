@@ -1,4 +1,4 @@
-﻿using Game;
+using Game;
 using Game.Common;
 using Game.Net;
 using Game.Prefabs;
@@ -99,6 +99,7 @@ namespace Traffic.Systems.LaneConnections
                 edgeData = SystemAPI.GetComponentLookup<Edge>(true),
                 nodeData = SystemAPI.GetComponentLookup<Node>(true),
                 roundaboutData = SystemAPI.GetComponentLookup<Roundabout>(true),
+                connectorData = SystemAPI.GetComponentLookup<Connector>(true),
                 connectedEdgesBuffer = SystemAPI.GetBufferLookup<ConnectedEdge>(true),
                 prefabCompositionLaneBuffer= SystemAPI.GetBufferLookup<NetCompositionLane>(true),
                 subLanesBuffer = SystemAPI.GetBufferLookup<SubLane>(true),
@@ -126,6 +127,7 @@ namespace Traffic.Systems.LaneConnections
             /// <summary>lane end on the roundabout ring (owned by the node), see RoundaboutUtils</summary>
             public bool isRing;
             public int ringLaneIndex;
+            public int pathLaneIndex;
             // public ConnectionType supportedType;
         }
     }

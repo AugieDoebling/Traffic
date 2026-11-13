@@ -1,4 +1,4 @@
-﻿using Colossal.Mathematics;
+using Colossal.Mathematics;
 using Game.Net;
 using Game.Pathfind;
 using Game.Prefabs;
@@ -32,6 +32,7 @@ namespace Traffic.Systems.LaneConnections
             [ReadOnly] public ComponentLookup<Edge> edgeData;
             [ReadOnly] public ComponentLookup<Node> nodeData;
             [ReadOnly] public ComponentLookup<Roundabout> roundaboutData;
+            [ReadOnly] public ComponentLookup<Connector> connectorData;
             [ReadOnly] public BufferLookup<ConnectedEdge> connectedEdgesBuffer;
             [ReadOnly] public BufferLookup<NetCompositionLane> prefabCompositionLaneBuffer;
             [ReadOnly] public BufferLookup<SubLane> subLanesBuffer;
@@ -153,28 +154,38 @@ namespace Traffic.Systems.LaneConnections
                     return;
                 }
 
-                NodeEdgeLaneKey sourceConnectorKey;
+                // the lane end placed on the ring is identified by the same edge and flagged lane index
+                int ringPathLaneIndex = startOnRing ? lane.m_StartNode.GetLaneIndex() : lane.m_EndNode.GetLaneIndex();
+                int ringLaneIndex = startOnRing ? Helpers.RoundaboutUtils.EncodeExit(ringPathLaneIndex) : Helpers.RoundaboutUtils.EncodeEntry(ringPathLaneIndex);
+                if (!connectorsList.TryGetValue(new NodeEdgeLaneKey(node.Index, edge.Index, ringLaneIndex), out Entity ringConnector) ||
+                    !connectorData.TryGetComponent(ringConnector, out Connector ringConnectorData) ||
+                    ringConnectorData.pathLaneIndex != ringPathLaneIndex)
+                {
+                    // not a lane of the ring, middle point of the bypass lane
+                    ringLaneIndex |= Helpers.RoundaboutUtils.RingBypassFlag;
+                }
+                int2 laneIndexMap;
                 float3x2 lanePositionMap;
                 int4 carriagewayWithGroupMap;
                 if (startOnRing)
                 {
                     // exit lane, the source connector is placed on the ring
-                    sourceConnectorKey = new NodeEdgeLaneKey(node.Index, node.Index, Helpers.RoundaboutUtils.EncodeRingLaneIndex(lane.m_StartNode.GetLaneIndex(), isTarget: false));
+                    laneIndexMap = new int2(ringLaneIndex, edgeLaneIndex);
                     lanePositionMap = new float3x2(float3.zero, lanePosition);
-                    carriagewayWithGroupMap = new int4(-1, -1, carriagewayAndGroup.x, carriagewayAndGroup.y);
+                    carriagewayWithGroupMap = new int4(0, 0, carriagewayAndGroup.x, carriagewayAndGroup.y);
                 }
                 else
                 {
                     // entry lane, the source connector is the edge lane end
-                    sourceConnectorKey = new NodeEdgeLaneKey(node.Index, edge.Index, edgeLaneIndex);
+                    laneIndexMap = new int2(edgeLaneIndex, ringLaneIndex);
                     lanePositionMap = new float3x2(lanePosition, float3.zero);
-                    carriagewayWithGroupMap = new int4(carriagewayAndGroup.x, carriagewayAndGroup.y, -1, -1);
+                    carriagewayWithGroupMap = new int4(carriagewayAndGroup.x, carriagewayAndGroup.y, 0, 0);
                 }
 
-                if (connectorsList.TryGetValue(sourceConnectorKey, out Entity sourceConnector))
+                if (connectorsList.TryGetValue(new NodeEdgeLaneKey(node.Index, edge.Index, laneIndexMap.x), out Entity sourceConnector))
                 {
-                    Connection connection = new Connection(lane, curveData[subLane.m_SubLane].m_Bezier, lanePositionMap, carriagewayWithGroupMap, subLane.m_PathMethods, startOnRing ? node : sourceEdge, endOnRing ? node : targetEdge, isUnsafe,
-                        isForbidden);
+                    Connection connection = new Connection(lane, curveData[subLane.m_SubLane].m_Bezier, lanePositionMap, carriagewayWithGroupMap, subLane.m_PathMethods, edge, edge, isUnsafe, isForbidden);
+                    connection.laneIndexMap = laneIndexMap;
                     Entity e = commandBuffer.CreateEntity();
                     DynamicBuffer<Connection> connectionsBuffer = commandBuffer.AddBuffer<Connection>(e);
                     connectionsBuffer.Add(connection);

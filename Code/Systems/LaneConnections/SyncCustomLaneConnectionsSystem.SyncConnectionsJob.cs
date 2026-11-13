@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -188,8 +188,8 @@ namespace Traffic.Systems.LaneConnections
                                                 Logger.DebugConnectionsSync($"Target ({generatedConnection.targetEntity}): {genEdgeInfo.edge} {genEdgeInfo.wasTemp} start: {genEdgeInfo.isStart} | {genEdgeInfo.compositionChanged} || {(newEdgeCompositionMapping.IsCreated ? newEdgeCompositionMapping.Count : -1)} -> {(genEdgeCompositionMapping.IsCreated ? genEdgeCompositionMapping.Count : -1)}");
                                                 if (genEdgeCompositionMapping.IsCreated)
                                                 {
-                                                    ValueTuple<int3, float3> sourceMap = newEdgeCompositionMapping[generatedConnection.laneIndexMap.x];
-                                                    ValueTuple<int3, float3> targetMap = genEdgeCompositionMapping[generatedConnection.laneIndexMap.y];
+                                                    ValueTuple<int3, float3> sourceMap = GetLaneMapping(newEdgeCompositionMapping, generatedConnection.laneIndexMap.x);
+                                                    ValueTuple<int3, float3> targetMap = GetLaneMapping(genEdgeCompositionMapping, generatedConnection.laneIndexMap.y);
                                                     Logger.DebugConnectionsSync($"Mappings ({newEdgeInfo.edge} -> {genEdgeInfo.edge}): [{generatedConnection.laneIndexMap}-{new int2(sourceMap.Item1.x, targetMap.Item1.x)}], [{generatedConnection.carriagewayAndGroupIndexMap}-{new int4(sourceMap.Item1.yz, targetMap.Item1.yz)}], [{generatedConnection.lanePositionMap}-{new float3x2(sourceMap.Item2, targetMap.Item2)}]");
                                                     if (math.any(new bool2(math.any(sourceMap.Item1 < 0), math.any(targetMap.Item1 < 0))))
                                                     {
@@ -229,7 +229,8 @@ namespace Traffic.Systems.LaneConnections
                                     }
 
                                     bool validComposition = false;
-                                    if (newEdgeCompositionMapping.IsCreated && newEdgeCompositionMapping.TryGetValue(connection.laneIndex, out ValueTuple<int3, float3> pair) && math.any(pair.Item1 >= 0))
+                                    ValueTuple<int3, float3> pair = default;
+                                    if (newEdgeCompositionMapping.IsCreated && TryGetLaneMapping(newEdgeCompositionMapping, connection.laneIndex, out pair) && math.any(pair.Item1 >= 0))
                                     {
                                         validComposition = true;
                                         newModifiedConnections.Add(new ModifiedLaneConnections()
@@ -478,6 +479,24 @@ namespace Traffic.Systems.LaneConnections
                 }
             }
             
+            /// <summary>
+            /// Lane end placed on the roundabout ring (see Helpers.RoundaboutUtils) is not a part of the edge composition, the index is kept as is
+            /// </summary>
+            private static bool TryGetLaneMapping(NativeHashMap<int, ValueTuple<int3, float3>> mapping, int laneIndex, out ValueTuple<int3, float3> result)
+            {
+                if (Helpers.RoundaboutUtils.IsRing(laneIndex))
+                {
+                    result = new ValueTuple<int3, float3>(new int3(laneIndex, 0, 0), float3.zero);
+                    return true;
+                }
+                return mapping.TryGetValue(laneIndex, out result);
+            }
+
+            private static ValueTuple<int3, float3> GetLaneMapping(NativeHashMap<int, ValueTuple<int3, float3>> mapping, int laneIndex)
+            {
+                return TryGetLaneMapping(mapping, laneIndex, out ValueTuple<int3, float3> result) ? result : new ValueTuple<int3, float3>(new int3(-1), float3.zero);
+            }
+
             private NativeHashMap<int, ValueTuple<int3, float3>> CalculateEdgeLaneCompositionMapping(Entity originalEdge, Composition originalComposition, Entity tempEdge, bool2 isEndMap, Composition tempComposition)
             {
                 DynamicBuffer<NetCompositionLane> originalCompositionLanes = netCompositionLaneBuffer[originalComposition.m_Edge];

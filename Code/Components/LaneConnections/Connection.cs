@@ -18,6 +18,11 @@ namespace Traffic.Components.LaneConnections
         /// (sourceCarriageway, sourceGroupIndex, targetCarriageway, targetGroupIndex)
         /// </summary>
         public int4 laneCarriagewayWithGroupIndexMap;
+        /// <summary>
+        /// (sourceLaneIndex, targetLaneIndex) matching Connector.laneIndex,
+        /// lane end placed on the roundabout ring has a flagged index (see RoundaboutUtils)
+        /// </summary>
+        public int2 laneIndexMap;
         public float3x2 lanePositionMap;
         public Bezier4x3 curve;
         public PathMethod method;
@@ -31,6 +36,7 @@ namespace Traffic.Components.LaneConnections
             method = pathMethod;
             lanePositionMap = positionMap;
             laneCarriagewayWithGroupIndexMap = carriagewayWithGroupIndexMap;
+            laneIndexMap = new int2(laneData.m_StartNode.GetLaneIndex() & 0xff, laneData.m_EndNode.GetLaneIndex() & 0xff);
             this.curve = curve;
             this.sourceEdge = sourceEdge;
             this.targetEdge = targetEdge;

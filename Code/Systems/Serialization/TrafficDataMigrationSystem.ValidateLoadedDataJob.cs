@@ -95,7 +95,7 @@ namespace Traffic.Systems.Serialization
 
             private bool ValidateLaneConnectionsSettings(int jobIndex, Entity nodeEntity, ref NativeHashMap<Entity, EdgeComposition> edgeCompositions, in DynamicBuffer<ModifiedLaneConnections> modifiedConnections, in DynamicBuffer<ConnectedEdge> connectedEdges)
             {
-                if (!FillEdgeCompositions(nodeEntity, in connectedEdges, ref edgeCompositions))
+                if (!FillEdgeCompositions(nodeEntity, in connectedEdges, ref edgeCompositions, out bool isRoundabout))
                 {
                     return false;
                 }
@@ -130,7 +130,16 @@ namespace Traffic.Systems.Serialization
                         Logger.Serialization($"Couldn't find edge {modifiedConnection.edgeEntity} in compositions! Reset all connections at {nodeEntity}");
                         break;
                     }
-                    if (!compositions.compositionLanes.TryGetValue(modifiedConnection.laneIndex, out NetCompositionLane laneData))
+                    // lane end placed on the roundabout ring is not a part of the edge composition
+                    bool isRingSource = Helpers.RoundaboutUtils.IsRing(modifiedConnection.laneIndex);
+                    NetCompositionLane laneData = default;
+                    if (isRingSource && !isRoundabout)
+                    {
+                        forceResetConnections = true;
+                        Logger.Serialization($"Roundabout lane index {modifiedConnection.laneIndex} at non-roundabout node! Reset all connections at {nodeEntity}");
+                        break;
+                    }
+                    if (!isRingSource && !compositions.compositionLanes.TryGetValue(modifiedConnection.laneIndex, out laneData))
                     {
                         forceResetConnections = true;
                         Logger.Serialization($"Couldn't find lane index {modifiedConnection.laneIndex} in composition! Reset all connections at {nodeEntity}");
@@ -149,7 +158,7 @@ namespace Traffic.Systems.Serialization
                     modifiedConnection.carriagewayAndGroup = new int2(laneData.m_Carriageway, laneData.m_Group);
 
                     updatedGeneratedConnections.Clear();
-                    if (!TryFixGeneratedConnections(nodeEntity, modifiedConnection, in connections, ref updatedGeneratedConnections, ref edgeCompositions))
+                    if (!TryFixGeneratedConnections(nodeEntity, modifiedConnection, in connections, ref updatedGeneratedConnections, ref edgeCompositions, isRoundabout))
                     {
                         forceResetConnections = true;
                         Logger.Serialization($"Couldn't fix generated connections of {modifiedConnection.modifiedConnections}! Reset all connections at {nodeEntity}");
@@ -174,7 +183,7 @@ namespace Traffic.Systems.Serialization
                 return !forceResetConnections;
             }
 
-            private bool TryFixGeneratedConnections(Entity nodeEntity, ModifiedLaneConnections modifiedConnection, in DynamicBuffer<GeneratedConnection> generatedConnections, ref NativeList<GeneratedConnection> updatedGeneratedConnections, ref NativeHashMap<Entity,EdgeComposition> edgeCompositions)
+            private bool TryFixGeneratedConnections(Entity nodeEntity, ModifiedLaneConnections modifiedConnection, in DynamicBuffer<GeneratedConnection> generatedConnections, ref NativeList<GeneratedConnection> updatedGeneratedConnections, ref NativeHashMap<Entity,EdgeComposition> edgeCompositions, bool isRoundabout)
             {
                 for (var i = 0; i < generatedConnections.Length; i++)
                 {
@@ -192,7 +201,15 @@ namespace Traffic.Systems.Serialization
                         return false;
                     }
 
-                    if (!edgeComposition.compositionLanes.TryGetValue(generatedConnection.laneIndexMap.y, out NetCompositionLane lane))
+                    bool isRingSource = Helpers.RoundaboutUtils.IsRing(generatedConnection.laneIndexMap.x);
+                    bool isRingTarget = Helpers.RoundaboutUtils.IsRing(generatedConnection.laneIndexMap.y);
+                    if (isRoundabout ? (isRingSource == isRingTarget || generatedConnection.sourceEntity != generatedConnection.targetEntity) : (isRingSource || isRingTarget))
+                    {
+                        Logger.Serialization($"Lane indexes {generatedConnection.laneIndexMap} not valid, roundabout: {isRoundabout}! {modifiedConnection.modifiedConnections}[{i}] - {generatedConnection.targetEntity}. Reset all connections at {nodeEntity}");
+                        return false;
+                    }
+                    NetCompositionLane lane = default;
+                    if (!isRingTarget && !edgeComposition.compositionLanes.TryGetValue(generatedConnection.laneIndexMap.y, out lane))
                     {
                         Logger.Serialization($"Lane with index {generatedConnection.laneIndexMap.y} not found! {modifiedConnection.modifiedConnections}[{i}] - {generatedConnection.targetEntity}. Reset all connections at {nodeEntity}");
                         return false;
@@ -223,8 +240,9 @@ namespace Traffic.Systems.Serialization
                 return true;
             }
 
-            private bool FillEdgeCompositions(Entity nodeEntity, in DynamicBuffer<ConnectedEdge> connectedEdges, ref NativeHashMap<Entity, EdgeComposition> compositions)
+            private bool FillEdgeCompositions(Entity nodeEntity, in DynamicBuffer<ConnectedEdge> connectedEdges, ref NativeHashMap<Entity, EdgeComposition> compositions, out bool isRoundabout)
             {
+                isRoundabout = false;
                 ResetCompositionMap(ref compositions);
                 for (var i = 0; i < connectedEdges.Length; i++)
                 {
@@ -243,8 +261,13 @@ namespace Traffic.Systems.Serialization
                         if (netCompositionData.TryGetComponent(isEnd ? data.m_EndNode : data.m_StartNode, out NetCompositionData nodeCompositionData) &&
                             (nodeCompositionData.m_Flags.m_General & CompositionFlags.General.Roundabout) != 0)
                         {
+#if EXPERIMENTAL_ROUNDABOUTS
+                            // only connections with the lane end on the ring are valid (see Helpers.RoundaboutUtils)
+                            isRoundabout = true;
+#else
                             Logger.Serialization("Detected Roundabout, remove settings!");
                             return false;
+#endif
                         }
                     }
 

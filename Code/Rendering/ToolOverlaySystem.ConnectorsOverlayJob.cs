@@ -2,6 +2,7 @@
 using Game.Tools;
 using Traffic.CommonData;
 using Traffic.Components.LaneConnections;
+using Traffic.Systems.Helpers;
 using Traffic.Tools;
 using Unity.Burst;
 using Unity.Collections;
@@ -53,6 +54,19 @@ namespace Traffic.Rendering
                         target = controlPoints[1].m_OriginalEntity;
                     }
                 }
+                bool hasRing = false;
+                for (int i = 0; i < connectorDataChunks.Length && !hasRing; i++)
+                {
+                    NativeArray<Connector> chunkConnectors = connectorDataChunks[i].GetNativeArray(ref connectorType);
+                    for (int j = 0; j < chunkConnectors.Length; j++)
+                    {
+                        if (RoundaboutUtils.IsRing(chunkConnectors[j].laneIndex))
+                        {
+                            hasRing = true;
+                            break;
+                        }
+                    }
+                }
                 for (int i = 0; i < connectorDataChunks.Length; i++)
                 {
                     ArchetypeChunk chunk = connectorDataChunks[i];
@@ -75,6 +89,11 @@ namespace Traffic.Rendering
                         
                         if (renderTarget)
                         {
+                            // roundabout: show only targets which can be connected with the selected source
+                            if (hasRing && !isSource && !RoundaboutUtils.IsValidPair(in sourceConnector, in connector, hasRing))
+                            {
+                                continue;
+                            }
                             if (sourceConnector.vehicleGroup == VehicleGroup.Car &&
                                 (connector.vehicleGroup & VehicleGroup.Car) == 0)
                             {
@@ -104,12 +123,7 @@ namespace Traffic.Rendering
                                 position,
                                 diameter);
                         }
-#if EXPERIMENTAL_ROUNDABOUTS
-                        // roundabouts are read-only for now, show the ring targets together with sources
-                        else if ((connector.connectorType & ConnectorType.Target) != 0 && (renderTarget || (renderSource && connector.edge == connector.node)))
-#else
                         else if ((connector.connectorType & ConnectorType.Target) != 0 && renderTarget)
-#endif
                         {
                             overlayBuffer.DrawCircle(
                                 CalculateConnectorColor(connector, false, false),

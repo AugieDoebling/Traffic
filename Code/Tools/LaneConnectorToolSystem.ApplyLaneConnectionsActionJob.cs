@@ -1,4 +1,4 @@
-﻿using Game.Common;
+using Game.Common;
 using Game.Net;
 using Game.Prefabs;
 using Traffic.CommonData;
@@ -109,7 +109,7 @@ namespace Traffic.Tools
                                     for (var k = 0; k < connections.Length; k++)
                                     {
                                         GeneratedConnection connection = connections[k];
-                                        if (!connection.sourceEntity.Equals(connection.targetEntity))
+                                        if (!connection.sourceEntity.Equals(connection.targetEntity) || Traffic.Systems.Helpers.RoundaboutUtils.IsRing(connection.laneIndexMap.x | connection.laneIndexMap.y))
                                         {
                                             newConnections.Add(connection);
                                         }
@@ -304,13 +304,13 @@ namespace Traffic.Tools
                         for (var k = 0; k < connections.Length; k++)
                         {
                             Connection connection = connections[k];
-                            if (!connection.sourceEdge.Equals(connection.targetEdge))
+                            if (!connection.sourceEdge.Equals(connection.targetEdge) || Traffic.Systems.Helpers.RoundaboutUtils.IsRing(connection.laneIndexMap.x | connection.laneIndexMap.y))
                             {
                                 resultConnections.Add(new GeneratedConnection()
                                 {
                                     sourceEntity = connection.sourceEdge,
                                     targetEntity = connection.targetEdge,
-                                    laneIndexMap = new int2(connectorItem.connector.laneIndex, connection.targetNode.GetLaneIndex() & 0xff),
+                                    laneIndexMap = new int2(connectorItem.connector.laneIndex, connection.laneIndexMap.y),
                                     lanePositionMap = connection.lanePositionMap,
                                     carriagewayAndGroupIndexMap = connection.laneCarriagewayWithGroupIndexMap,
 #if DEBUG_GIZMO
@@ -346,7 +346,7 @@ namespace Traffic.Tools
                                 {
                                     sourceEntity = connection.sourceEdge,
                                     targetEntity = connection.targetEdge,
-                                    laneIndexMap = new int2(connectorItem.connector.laneIndex, connection.targetNode.GetLaneIndex() & 0xff),
+                                    laneIndexMap = new int2(connectorItem.connector.laneIndex, connection.laneIndexMap.y),
                                     lanePositionMap = connection.lanePositionMap,
                                     carriagewayAndGroupIndexMap = connection.laneCarriagewayWithGroupIndexMap,
 #if DEBUG_GIZMO

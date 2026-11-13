@@ -1,4 +1,4 @@
-﻿using Colossal.Mathematics;
+using Colossal.Mathematics;
 using Game.Net;
 using Game.Pathfind;
 using Game.Rendering;
@@ -63,13 +63,13 @@ namespace Traffic.Rendering
                 if (connector != Entity.Null)
                 {
                     Connector c = connectorsData[connector];
-                    connectorNode = new PathNode(c.edge, (ushort)c.laneIndex);
                     isRingConnector = RoundaboutUtils.IsRingConnector(in c);
+                    connectorNode = isRingConnector ? new PathNode(c.node, (ushort)c.pathLaneIndex) : new PathNode(c.edge, (ushort)c.laneIndex);
                     if (connector2 != Entity.Null && state == LaneConnectorToolSystem.State.SelectingTargetConnector && connectorsData.HasComponent(connector2))
                     {
                         Connector c2 = connectorsData[connector2];
-                        connectorNode2 = new PathNode(c2.edge, (ushort)c2.laneIndex);
                         isRingConnector2 = RoundaboutUtils.IsRingConnector(in c2);
+                        connectorNode2 = isRingConnector2 ? new PathNode(c2.node, (ushort)c2.pathLaneIndex) : new PathNode(c2.edge, (ushort)c2.laneIndex);
                         previewConnection = true;
                     }
                     floatingPosition = state == LaneConnectorToolSystem.State.SelectingTargetConnector && connector != connector2; //TODO bug
@@ -97,7 +97,7 @@ namespace Traffic.Rendering
                                     hovered.Add(new ConnectionRenderData() { bezier = curve, color = new Color(1f, 0f, 0.15f, 0.9f), color2 = Color.clear, width = connectionWidth, isUnsafe = connection.isUnsafe, isForbidden = connection.isForbidden });
                                     continue;
                                 }
-                                if (actionOverlayData.mode == ModUISystem.ActionOverlayPreview.RemoveUTurns && connection.sourceEdge == connection.targetEdge)
+                                if (actionOverlayData.mode == ModUISystem.ActionOverlayPreview.RemoveUTurns && connection.sourceEdge == connection.targetEdge && !RoundaboutUtils.IsRing(connection.laneIndexMap.x | connection.laneIndexMap.y))
                                 {
                                     hovered.Add(new ConnectionRenderData() { bezier = curve, color = new Color(1f, 0f, 0.15f, 0.9f), color2 = Color.clear, width = connectionWidth, isUnsafe = connection.isUnsafe, isForbidden = connection.isForbidden });
                                     continue;

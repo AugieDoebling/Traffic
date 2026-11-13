@@ -1,4 +1,4 @@
-﻿using System.Linq;
+using System.Linq;
 using Colossal.Collections;
 using Colossal.Mathematics;
 using Game.Common;
@@ -135,6 +135,12 @@ namespace Traffic.Tools
                 }
                 NativeHashMap<ConnectorKey, Entity> connectorsMap = new NativeHashMap<ConnectorKey, Entity>(connectorElements.Length, Allocator.Temp);
                 FillConnectorMap(connectorElements, connectorsMap);
+                if (firstConnectorValid && nextConnectorValid && !RoundaboutUtils.IsValidPair(in firstConnector, in nextConnector, HasRingConnectors(connectorElements)))
+                {
+                    // roundabout: only entry (edge lane -> ring) or exit (ring -> edge lane) of the same edge can be connected
+                    nextConnectorValid = false;
+                    nextConnector = new Connector() { laneIndex = -1 };
+                }
                 if (modifiedConnectionBuffer.HasBuffer(intersectionNode))
                 {
                     DynamicBuffer<ModifiedLaneConnections> modifiedConnections = modifiedConnectionBuffer[intersectionNode];
@@ -196,6 +202,18 @@ namespace Traffic.Tools
                 Logger.DebugTool($"CreateDefinitionsJob finished state:{state}, n:{node}, edit:{editingIntersection}, count:{count}");
             }
 
+            private bool HasRingConnectors(DynamicBuffer<ConnectorElement> connectorElements)
+            {
+                for (int i = 0; i < connectorElements.Length; i++)
+                {
+                    if (connectorData.TryGetComponent(connectorElements[i].entity, out Connector connector) && RoundaboutUtils.IsRingConnector(in connector))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             private void FillConnectorMap(DynamicBuffer<ConnectorElement> connectorElements, NativeHashMap<ConnectorKey, Entity> connectorsMap) {
                 for (int i = 0; i < connectorElements.Length; i++)
                 {
@@ -247,8 +265,8 @@ namespace Traffic.Tools
                     }
                     if (connection.sourceEdge == sourceConnector.edge &&
                         connection.targetEdge == targetConnector.edge &&
-                        (connection.sourceNode.GetLaneIndex() & 0xff) == sourceConnector.laneIndex &&
-                        (connection.targetNode.GetLaneIndex() & 0xff) == targetConnector.laneIndex)
+                        connection.laneIndexMap.x == sourceConnector.laneIndex &&
+                        connection.laneIndexMap.y == targetConnector.laneIndex)
                     {
                         connectionExists = true;
                         found = true;
@@ -260,7 +278,7 @@ namespace Traffic.Tools
                     TempLaneConnection tempConnection = new TempLaneConnection(
                         connection.sourceEdge,
                         connection.targetEdge,
-                        new int2(connection.sourceNode.GetLaneIndex() & 0xff, connection.targetNode.GetLaneIndex() & 0xff),
+                        connection.laneIndexMap,
                         connection.lanePositionMap,
                         connection.laneCarriagewayWithGroupIndexMap,
                         connection.method,
@@ -432,8 +450,8 @@ namespace Traffic.Tools
                         for (int j = 0; j < data.Length; j++)
                         {
                             Connection laneConnection = data[j];
-                            if (laneConnection.sourceNode.OwnerEquals(new PathNode(sourceConnector.edge, 0)) &&
-                                (laneConnection.sourceNode.GetLaneIndex() & 0xff) == sourceConnector.laneIndex)
+                            if (laneConnection.sourceEdge == sourceConnector.edge &&
+                                laneConnection.laneIndexMap.x == sourceConnector.laneIndex)
                             {
                                 Lane l = new Lane()
                                 {
@@ -595,7 +613,7 @@ namespace Traffic.Tools
                                         GeneratedConnection connection = connections[k];
                                         if (connectorsMap.TryGetValue(new ConnectorKey(connection.sourceEntity, connection.laneIndexMap.x), out Entity sourceConnectorEntity) &&
                                             connectorsMap.TryGetValue(new ConnectorKey(connection.targetEntity, connection.laneIndexMap.y), out Entity targetConnectorEntity) &&
-                                            !connection.sourceEntity.Equals(connection.targetEntity))
+                                            (!connection.sourceEntity.Equals(connection.targetEntity) || RoundaboutUtils.IsRing(connection.laneIndexMap.x | connection.laneIndexMap.y)))
                                         {
                                             Connector sConnector = connectorData[sourceConnectorEntity];
                                             Connector tConnector = connectorData[targetConnectorEntity];
@@ -825,13 +843,13 @@ namespace Traffic.Tools
                         for (var k = 0; k < connections.Length; k++)
                         {
                             Connection connection = connections[k];
-                            if (!connection.sourceEdge.Equals(connection.targetEdge))
+                            if (!connection.sourceEdge.Equals(connection.targetEdge) || RoundaboutUtils.IsRing(connection.laneIndexMap.x | connection.laneIndexMap.y))
                             {
                                 resultConnections.Add(new TempLaneConnection()
                                 {
                                     sourceEntity = connection.sourceEdge,
                                     targetEntity = connection.targetEdge,
-                                    laneIndexMap = new int2(connectorItem.connector.laneIndex, connection.targetNode.GetLaneIndex() & 0xff),
+                                    laneIndexMap = new int2(connectorItem.connector.laneIndex, connection.laneIndexMap.y),
                                     lanePositionMap = connection.lanePositionMap,
                                     carriagewayAndGroupIndexMap = connection.laneCarriagewayWithGroupIndexMap,
                                     bezier = connection.curve,
@@ -866,7 +884,7 @@ namespace Traffic.Tools
                                 {
                                     sourceEntity = connection.sourceEdge,
                                     targetEntity = connection.targetEdge,
-                                    laneIndexMap = new int2(connectorItem.connector.laneIndex, connection.targetNode.GetLaneIndex() & 0xff),
+                                    laneIndexMap = new int2(connectorItem.connector.laneIndex, connection.laneIndexMap.y),
                                     lanePositionMap = connection.lanePositionMap,
                                     carriagewayAndGroupIndexMap = connection.laneCarriagewayWithGroupIndexMap,
                                     bezier = connection.curve,

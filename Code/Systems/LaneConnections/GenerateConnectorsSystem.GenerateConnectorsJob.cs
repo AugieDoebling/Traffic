@@ -290,28 +290,51 @@ namespace Traffic.Systems.LaneConnections
             }
 
             /// <summary>
-            /// Collects lane ends placed on the roundabout ring: the end of each entry lane (ring target)
-            /// and the start of each exit lane (ring source). They are read from existing node sub lanes,
-            /// lanes running along the ring (both ends owned by the node) are ignored
+            /// Collects lane ends placed on the roundabout ring (see <see cref="RoundaboutUtils"/>).
+            /// Each connected edge gets:
+            ///  - ring targets: every lane of the ring section its entry lanes lead to
+            ///  - ring sources: every lane of the ring section its exit lanes start from
+            /// The ring sections are found from existing node sub lanes: lanes running along the ring have both ends owned by the node,
+            /// entry and exit lanes only one of them
             /// </summary>
             private void GetRingConnectors(Entity node, NativeList<ConnectPosition> sourceConnectPositions, NativeList<ConnectPosition> targetConnectPositions)
             {
-                if (!subLanes.HasBuffer(node))
+                if (!subLanes.HasBuffer(node) || !connectedEdges.HasBuffer(node))
                 {
                     return;
                 }
                 DynamicBuffer<SubLane> nodeSubLanes = subLanes[node];
-                NativeHashSet<int> visited = new NativeHashSet<int>(16, Allocator.Temp);
+                DynamicBuffer<ConnectedEdge> nodeEdges = connectedEdges[node];
+                // ends of the lanes running along the ring, key: lane index of the path node (lane | segment << 8)
+                NativeHashMap<int, RingPoint> ringPoints = new NativeHashMap<int, RingPoint>(16, Allocator.Temp);
+                NativeList<RingSection> sections = new NativeList<RingSection>(8, Allocator.Temp);
+                NativeHashSet<ConnectorKey> visited = new NativeHashSet<ConnectorKey>(16, Allocator.Temp);
+
                 for (int i = 0; i < nodeSubLanes.Length; i++)
                 {
-                    SubLane nodeSubLane = nodeSubLanes[i];
-                    Entity subLane = nodeSubLane.m_SubLane;
-                    if ((nodeSubLane.m_PathMethods & (PathMethod.Road | PathMethod.Bicycle)) == 0 ||
-                        masterLaneData.HasComponent(subLane) ||
-                        secondaryLaneData.HasComponent(subLane))
+                    if (!IsRingCarLane(nodeSubLanes[i]))
                     {
                         continue;
                     }
+                    Entity subLane = nodeSubLanes[i].m_SubLane;
+                    Lane lane = laneData[subLane];
+                    if (!RoundaboutUtils.IsOwnedBy(lane.m_StartNode, node) || !RoundaboutUtils.IsOwnedBy(lane.m_EndNode, node))
+                    {
+                        continue;
+                    }
+                    Bezier4x3 bezier = curveData[subLane].m_Bezier;
+                    GetLaneVehicleInfo(subLane, out VehicleGroup vehicleGroup, out bool isHighway);
+                    ringPoints.TryAdd(lane.m_StartNode.GetLaneIndex(), new RingPoint { position = bezier.a, travelDirection = MathUtils.StartTangent(bezier), vehicleGroup = vehicleGroup, isHighway = isHighway });
+                    ringPoints.TryAdd(lane.m_EndNode.GetLaneIndex(), new RingPoint { position = bezier.d, travelDirection = MathUtils.EndTangent(bezier), vehicleGroup = vehicleGroup, isHighway = isHighway });
+                }
+
+                for (int i = 0; i < nodeSubLanes.Length; i++)
+                {
+                    if (!IsRingCarLane(nodeSubLanes[i]))
+                    {
+                        continue;
+                    }
+                    Entity subLane = nodeSubLanes[i].m_SubLane;
                     Lane lane = laneData[subLane];
                     bool startOnRing = RoundaboutUtils.IsOwnedBy(lane.m_StartNode, node);
                     bool endOnRing = RoundaboutUtils.IsOwnedBy(lane.m_EndNode, node);
@@ -319,57 +342,135 @@ namespace Traffic.Systems.LaneConnections
                     {
                         continue;
                     }
-
-                    int ringLaneIndex = RoundaboutUtils.EncodeRingLaneIndex(endOnRing ? lane.m_EndNode.GetLaneIndex() : lane.m_StartNode.GetLaneIndex(), isTarget: endOnRing);
-                    if (!visited.Add(ringLaneIndex))
+                    Entity edge = Helpers.NetUtils.FindEdge(nodeEdges, endOnRing ? lane.m_StartNode : lane.m_EndNode);
+                    if (edge == Entity.Null)
                     {
                         continue;
                     }
-
-                    NetLaneData netLaneData = prefabNetLaneData[prefabRefData[subLane].m_Prefab];
-                    CarLaneData carLaneData = default(CarLaneData);
-                    TrackLaneData trackLaneData = default(TrackLaneData);
-                    bool isHighway = false;
-                    if ((netLaneData.m_Flags & LaneFlags.Track) != 0)
+                    int pathLaneIndex = endOnRing ? lane.m_EndNode.GetLaneIndex() : lane.m_StartNode.GetLaneIndex();
+                    if (ringPoints.ContainsKey(pathLaneIndex))
                     {
-                        trackLaneData = prefabTrackLaneData[prefabRefData[subLane].m_Prefab];
-                    }
-                    if ((netLaneData.m_Flags & LaneFlags.Road) != 0)
-                    {
-                        carLaneData = prefabCarLaneData[prefabRefData[subLane].m_Prefab];
-                        if (carLaneComponentData.TryGetComponent(subLane, out CarLane carLane))
+                        // entry or exit lane, remember which section of the ring is used by the edge
+                        RingSection section = new RingSection { edge = edge, segment = pathLaneIndex >> 8, isEntry = endOnRing };
+                        bool found = false;
+                        for (int j = 0; j < sections.Length; j++)
                         {
-                            isHighway = (carLane.m_Flags & CarLaneFlags.Highway) != 0;
+                            RingSection other = sections[j];
+                            found |= other.edge == section.edge && other.segment == section.segment && other.isEntry == section.isEntry;
+                        }
+                        if (!found)
+                        {
+                            sections.Add(in section);
                         }
                     }
-
-                    Bezier4x3 bezier = curveData[subLane].m_Bezier;
-                    // connector direction has to point "into" the intersection, the same as edge lane connectors
-                    float3 direction = endOnRing ? -MathUtils.EndTangent(bezier) : MathUtils.StartTangent(bezier);
-                    direction = MathUtils.Normalize(direction, direction.xz);
-                    direction.y = math.clamp(direction.y, -1f, 1f);
-                    ConnectPosition value = new ConnectPosition
+                    else if (visited.Add(new ConnectorKey(edge, endOnRing ? RoundaboutUtils.EncodeEntry(pathLaneIndex, true) : RoundaboutUtils.EncodeExit(pathLaneIndex, true))))
                     {
-                        edge = node,
-                        order = 0,
-                        position = endOnRing ? bezier.d : bezier.a,
-                        direction = direction,
-                        isTwoWay = false,
-                        isHighway = isHighway,
-                        vehicleGroup = GetVehicleGroup(netLaneData, carLaneData, trackLaneData),
-                        isRing = true,
-                        ringLaneIndex = ringLaneIndex,
-                    };
-                    if (endOnRing)
-                    {
-                        targetConnectPositions.Add(in value);
-                    }
-                    else
-                    {
-                        sourceConnectPositions.Add(in value);
+                        // the lane end is not a part of the ring - the middle point of the bypass lane between adjacent edges
+                        Bezier4x3 bezier = curveData[subLane].m_Bezier;
+                        GetLaneVehicleInfo(subLane, out VehicleGroup vehicleGroup, out bool isHighway);
+                        RingPoint point = new RingPoint
+                        {
+                            position = endOnRing ? bezier.d : bezier.a,
+                            travelDirection = endOnRing ? MathUtils.EndTangent(bezier) : MathUtils.StartTangent(bezier),
+                            vehicleGroup = vehicleGroup,
+                            isHighway = isHighway,
+                        };
+                        AddRingConnector(edge, pathLaneIndex, endOnRing, true, in point, sourceConnectPositions, targetConnectPositions);
                     }
                 }
+
+                NativeKeyValueArrays<int, RingPoint> points = ringPoints.GetKeyValueArrays(Allocator.Temp);
+                for (int i = 0; i < sections.Length; i++)
+                {
+                    RingSection section = sections[i];
+                    for (int j = 0; j < points.Length; j++)
+                    {
+                        int pathLaneIndex = points.Keys[j];
+                        if ((pathLaneIndex >> 8) == section.segment &&
+                            visited.Add(new ConnectorKey(section.edge, section.isEntry ? RoundaboutUtils.EncodeEntry(pathLaneIndex) : RoundaboutUtils.EncodeExit(pathLaneIndex))))
+                        {
+                            RingPoint point = points.Values[j];
+                            AddRingConnector(section.edge, pathLaneIndex, section.isEntry, false, in point, sourceConnectPositions, targetConnectPositions);
+                        }
+                    }
+                }
+                points.Dispose();
+                ringPoints.Dispose();
+                sections.Dispose();
                 visited.Dispose();
+            }
+
+            private bool IsRingCarLane(SubLane nodeSubLane)
+            {
+                return (nodeSubLane.m_PathMethods & (PathMethod.Road | PathMethod.Bicycle)) != 0 &&
+                    !masterLaneData.HasComponent(nodeSubLane.m_SubLane) &&
+                    !secondaryLaneData.HasComponent(nodeSubLane.m_SubLane);
+            }
+
+            private void GetLaneVehicleInfo(Entity subLane, out VehicleGroup vehicleGroup, out bool isHighway)
+            {
+                Entity prefab = prefabRefData[subLane].m_Prefab;
+                NetLaneData netLaneData = prefabNetLaneData[prefab];
+                CarLaneData carLaneData = default(CarLaneData);
+                TrackLaneData trackLaneData = default(TrackLaneData);
+                isHighway = false;
+                if ((netLaneData.m_Flags & LaneFlags.Track) != 0)
+                {
+                    trackLaneData = prefabTrackLaneData[prefab];
+                }
+                if ((netLaneData.m_Flags & LaneFlags.Road) != 0)
+                {
+                    carLaneData = prefabCarLaneData[prefab];
+                    if (carLaneComponentData.TryGetComponent(subLane, out CarLane carLane))
+                    {
+                        isHighway = (carLane.m_Flags & CarLaneFlags.Highway) != 0;
+                    }
+                }
+                vehicleGroup = GetVehicleGroup(netLaneData, carLaneData, trackLaneData);
+            }
+
+            private void AddRingConnector(Entity edge, int pathLaneIndex, bool isEntry, bool isBypass, in RingPoint point, NativeList<ConnectPosition> sourceConnectPositions, NativeList<ConnectPosition> targetConnectPositions)
+            {
+                // connector direction has to point "into" the intersection, the same as edge lane connectors
+                float3 direction = isEntry ? -point.travelDirection : point.travelDirection;
+                direction = MathUtils.Normalize(direction, direction.xz);
+                direction.y = math.clamp(direction.y, -1f, 1f);
+                ConnectPosition value = new ConnectPosition
+                {
+                    edge = edge,
+                    order = 0,
+                    position = point.position,
+                    direction = direction,
+                    isTwoWay = false,
+                    isHighway = point.isHighway,
+                    vehicleGroup = point.vehicleGroup,
+                    isRing = true,
+                    ringLaneIndex = isEntry ? RoundaboutUtils.EncodeEntry(pathLaneIndex, isBypass) : RoundaboutUtils.EncodeExit(pathLaneIndex, isBypass),
+                    pathLaneIndex = pathLaneIndex,
+                };
+                if (isEntry)
+                {
+                    targetConnectPositions.Add(in value);
+                }
+                else
+                {
+                    sourceConnectPositions.Add(in value);
+                }
+            }
+
+            private struct RingPoint
+            {
+                public float3 position;
+                public float3 travelDirection;
+                public VehicleGroup vehicleGroup;
+                public bool isHighway;
+            }
+
+            private struct RingSection
+            {
+                public Entity edge;
+                public int segment;
+                public bool isEntry;
             }
 
             private VehicleGroup GetVehicleGroup(NetLaneData netLaneData, CarLaneData carLaneData, TrackLaneData trackLaneData)
@@ -405,8 +506,9 @@ namespace Traffic.Systems.LaneConnections
                         edge = connectPosition.edge,
                         node = node,
                         laneIndex = connectPosition.isRing ? connectPosition.ringLaneIndex : connectPosition.compositionLane.m_Index,
+                        pathLaneIndex = connectPosition.pathLaneIndex,
                         lanePosition = connectPosition.compositionLane.m_Position,
-                        carriagewayAndGroupIndex = connectPosition.isRing ? new int2(-1) : new int2(connectPosition.compositionLane.m_Carriageway, connectPosition.compositionLane.m_Group),
+                        carriagewayAndGroupIndex = connectPosition.isRing ? int2.zero : new int2(connectPosition.compositionLane.m_Carriageway, connectPosition.compositionLane.m_Group),
                         position = connectPosition.position,
                         direction = connectPosition.direction,
                         vehicleGroup = connectPosition.vehicleGroup | (connectPosition.isHighway ? VehicleGroup.Highway : VehicleGroup.None),
@@ -427,8 +529,9 @@ namespace Traffic.Systems.LaneConnections
                         edge = connectPosition.edge,
                         node = node,
                         laneIndex = connectPosition.isRing ? connectPosition.ringLaneIndex : connectPosition.compositionLane.m_Index,
+                        pathLaneIndex = connectPosition.pathLaneIndex,
                         lanePosition = connectPosition.compositionLane.m_Position,
-                        carriagewayAndGroupIndex = connectPosition.isRing ? new int2(-1) : new int2(connectPosition.compositionLane.m_Carriageway, connectPosition.compositionLane.m_Group),
+                        carriagewayAndGroupIndex = connectPosition.isRing ? int2.zero : new int2(connectPosition.compositionLane.m_Carriageway, connectPosition.compositionLane.m_Group),
                         position = connectPosition.position,
                         direction = connectPosition.direction,
                         vehicleGroup = connectPosition.vehicleGroup,

@@ -547,15 +547,37 @@ namespace Traffic.Tools
 
         /// <summary>
         /// Lane connections at the selected intersection can be previewed but not modified.
-        /// Roundabouts are read-only until custom entry/exit connections are supported by the lane generator
         /// </summary>
         private bool IsReadOnlyIntersection()
         {
-#if EXPERIMENTAL_ROUNDABOUTS
-            return _selectedNode != Entity.Null && EntityManager.HasComponent<Roundabout>(_selectedNode);
-#else
             return false;
-#endif
+        }
+
+        /// <summary>
+        /// Tests if the target connector can be connected with the selected source connector.
+        /// At the roundabout only entry (edge lane -> ring) or exit (ring -> edge lane) of the same edge is possible
+        /// </summary>
+        private bool IsValidTargetConnector(Connector targetConnector)
+        {
+            if (_controlPoints.Length == 0 ||
+                !EntityManager.TryGetComponent(_controlPoints[0].m_OriginalEntity, out Connector sourceConnector))
+            {
+                return false;
+            }
+            bool hasRing = false;
+            if (!_editIntersectionQuery.IsEmptyIgnoreFilter)
+            {
+                NativeArray<Entity> editEntities = _editIntersectionQuery.ToEntityArray(Allocator.Temp);
+                if (EntityManager.TryGetBuffer(editEntities[0], true, out DynamicBuffer<ConnectorElement> connectorElements))
+                {
+                    for (int i = 0; i < connectorElements.Length && !hasRing; i++)
+                    {
+                        hasRing = EntityManager.TryGetComponent(connectorElements[i].entity, out Connector connector) && RoundaboutUtils.IsRingConnector(in connector);
+                    }
+                }
+                editEntities.Dispose();
+            }
+            return RoundaboutUtils.IsValidPair(in sourceConnector, in targetConnector, hasRing);
         }
 
         private bool IsApplyAllowed(bool useVanilla = true) {
@@ -685,7 +707,7 @@ namespace Traffic.Tools
                         if (GetCustomRaycastResult(out ControlPoint controlPoint) && EntityManager.TryGetComponent(controlPoint.m_OriginalEntity, out Connector connector))
                         {
                             Logger.DebugTool($"[Apply {UnityEngine.Time.frameCount}]|Default|SelectTarget| Hit: {controlPoint.m_OriginalEntity} | {connector.vehicleGroup}");
-                            if (connector.connectorType == ConnectorType.Target)
+                            if (connector.connectorType == ConnectorType.Target && IsValidTargetConnector(connector))
                             {
                                 if (_controlPoints.Length > 0)
                                 {

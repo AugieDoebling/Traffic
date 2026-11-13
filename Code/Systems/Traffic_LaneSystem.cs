@@ -1086,6 +1086,16 @@ namespace Traffic.Systems
                                 testKeys = true;
                             }
                             /*NON-STOCK*/
+                            // modified connections at the roundabout (see Helpers.RoundaboutUtils)
+                            DynamicBuffer<ModifiedLaneConnections> ringModifications = default;
+                            bool hasRingModifications = false;
+                            #if EXPERIMENTAL_ROUNDABOUTS
+                            if (modifiedLaneConnections.Length > 0)
+                            {
+                                ringModifications = modifiedLaneConnections[entityIndex];
+                                hasRingModifications = ringModifications.Length > 0;
+                            }
+                            #endif
                             RoadTypes roadTypes = RoadTypes.None;
                             if (middleRadius2 > 0f)
                             {
@@ -1210,7 +1220,7 @@ namespace Traffic.Systems
                                         }
                                         CreateRoundaboutCarLanes(chunkIndex, ref random4, entity3, laneBuffer, ref prevLaneIndex, -1, ref laneGroup, connectPosition2, nextPosition2, middleConnections, tempSourceConnectPositions,
                                             tempTargetConnectPositions, targetNodeConnectPositions, roundaboutLane, dedicatedLane, intersectionFlags2, position, middleRadius2, ref laneCount3, laneCount, length, spaceForLanes, roadTypes, flag7,
-                                            tempComponents.Length != 0, ownerTemp3);
+                                            tempComponents.Length != 0, ownerTemp3, /*NON-STOCK*/ ringModifications, hasRingModifications);
                                         connectPosition2 = nextPosition2;
                                         flag9 = nextIsSource2;
                                         tempSourceConnectPositions.Clear();
@@ -1226,7 +1236,7 @@ namespace Traffic.Systems
                                     }
                                     CreateRoundaboutCarLanes(chunkIndex, ref random4, entity3, laneBuffer, ref prevLaneIndex, nextLaneIndex, ref laneGroup, connectPosition2, nextPosition, middleConnections, tempSourceConnectPositions,
                                         tempTargetConnectPositions, targetNodeConnectPositions, roundaboutLane, dedicatedLane, intersectionFlags2, position, middleRadius2, ref laneCount3, laneCount, length, spaceForLanes, roadTypes, flag7,
-                                        tempComponents.Length != 0, ownerTemp3);
+                                        tempComponents.Length != 0, ownerTemp3, /*NON-STOCK*/ ringModifications, hasRingModifications);
                                     tempSourceConnectPositions.Clear();
                                     tempTargetConnectPositions.Clear();
                                 }
@@ -1637,6 +1647,140 @@ namespace Traffic.Systems
 
             /// <summary>
             /// NON-STOCK
+            /// Finds modified connections of the lane end at the roundabout (see Helpers.RoundaboutUtils)
+            /// </summary>
+            /// <returns>true if connections of the lane end have been modified (default connections must not be generated)</returns>
+            private bool TryGetRingModifications(DynamicBuffer<ModifiedLaneConnections> modifications, bool isTemp, Entity edge, int laneIndex, out DynamicBuffer<GeneratedConnection> connections, out bool hasConnections)
+            {
+                connections = default;
+                hasConnections = false;
+                for (int i = 0; i < modifications.Length; i++)
+                {
+                    ModifiedLaneConnections modification = modifications[i];
+                    if (modification.edgeEntity != edge || modification.laneIndex != laneIndex)
+                    {
+                        continue;
+                    }
+                    if (isTemp && !(dataTemps.TryGetComponent(modification.modifiedConnections, out DataTemp temp) && (temp.flags & TempFlags.Delete) == 0))
+                    {
+                        continue;
+                    }
+                    if (modification.modifiedConnections != Entity.Null && generatedConnections.HasBuffer(modification.modifiedConnections))
+                    {
+                        connections = generatedConnections[modification.modifiedConnections];
+                        hasConnections = true;
+                    }
+                    return true;
+                }
+                return false;
+            }
+
+            /// <summary>
+            /// NON-STOCK
+            /// Collects custom roundabout entry connections of source lanes: (source index, ring lane index, isUnsafe)
+            /// </summary>
+            private void CollectRingEntries(DynamicBuffer<ModifiedLaneConnections> modifications, bool isTemp, NativeList<ConnectPosition> sourceBuffer, ref ulong modifiedSources, NativeList<int3> results)
+            {
+                for (int i = 0; i < sourceBuffer.Length; i++)
+                {
+                    ConnectPosition source = sourceBuffer[i];
+                    if (!TryGetRingModifications(modifications, isTemp, source.m_Owner, source.m_LaneData.m_Index, out DynamicBuffer<GeneratedConnection> connections, out bool hasConnections))
+                    {
+                        continue;
+                    }
+                    if (i < 64)
+                    {
+                        modifiedSources |= 1UL << i;
+                    }
+                    if (!hasConnections)
+                    {
+                        continue;
+                    }
+                    for (int j = 0; j < connections.Length; j++)
+                    {
+                        GeneratedConnection connection = connections[j];
+                        if (connection.targetEntity == source.m_Owner &&
+                            Helpers.RoundaboutUtils.IsRingEntry(connection.laneIndexMap.y) &&
+                            !Helpers.RoundaboutUtils.IsRingBypass(connection.laneIndexMap.y))
+                        {
+                            results.Add(new int3(i, Helpers.RoundaboutUtils.RingLane(connection.laneIndexMap.y), connection.isUnsafe ? 1 : 0));
+                        }
+                    }
+                }
+            }
+
+            /// <summary>
+            /// NON-STOCK
+            /// Collects custom roundabout exit connections to the edge: (exit lane iteration index, ring lane index, isUnsafe)
+            /// </summary>
+            private void CollectRingExits(DynamicBuffer<ModifiedLaneConnections> modifications, bool isTemp, Entity edge, NativeList<ConnectPosition> targetBuffer, int ringLaneCount, ref ulong modifiedRingLanes, NativeList<int3> results)
+            {
+                for (int i = 0; i < modifications.Length; i++)
+                {
+                    ModifiedLaneConnections modification = modifications[i];
+                    if (modification.edgeEntity != edge ||
+                        !Helpers.RoundaboutUtils.IsRingExit(modification.laneIndex) ||
+                        Helpers.RoundaboutUtils.IsRingBypass(modification.laneIndex) ||
+                        !TryGetRingModifications(modifications, isTemp, edge, modification.laneIndex, out DynamicBuffer<GeneratedConnection> connections, out bool hasConnections))
+                    {
+                        continue;
+                    }
+                    int ringLane = Helpers.RoundaboutUtils.RingLane(modification.laneIndex);
+                    if (ringLane < 64)
+                    {
+                        modifiedRingLanes |= 1UL << ringLane;
+                    }
+                    if (!hasConnections || ringLane >= ringLaneCount)
+                    {
+                        continue;
+                    }
+                    for (int j = 0; j < connections.Length; j++)
+                    {
+                        GeneratedConnection connection = connections[j];
+                        if (connection.targetEntity != edge || Helpers.RoundaboutUtils.IsRing(connection.laneIndexMap.y))
+                        {
+                            continue;
+                        }
+                        for (int k = 0; k < targetBuffer.Length; k++)
+                        {
+                            ConnectPosition target = targetBuffer[k];
+                            if (target.m_Owner == edge && target.m_LaneData.m_Index == connection.laneIndexMap.y)
+                            {
+                                // the same order as in the default exit lane loop
+                                results.Add(new int3(m_LeftHandTraffic ? k : targetBuffer.Length - k - 1, ringLane, connection.isUnsafe ? 1 : 0));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            /// <summary>
+            /// NON-STOCK
+            /// Tests if the default bypass lane (direct lane between adjacent edges of the roundabout) is allowed by modified connections
+            /// </summary>
+            private bool IsRingBypassAllowed(DynamicBuffer<ModifiedLaneConnections> modifications, bool hasModifications, bool isTemp, Entity edge, int sourceLaneIndex, int targetLaneIndex)
+            {
+                if (!hasModifications || !TryGetRingModifications(modifications, isTemp, edge, sourceLaneIndex, out DynamicBuffer<GeneratedConnection> connections, out bool hasConnections))
+                {
+                    return true;
+                }
+                if (hasConnections)
+                {
+                    for (int i = 0; i < connections.Length; i++)
+                    {
+                        GeneratedConnection connection = connections[i];
+                        if (connection.targetEntity == edge && connection.laneIndexMap.y == targetLaneIndex)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            /// <summary>
+            /// NON-STOCK
             /// </summary>
             private ConnectPosition FindNodeConnectPosition(NativeList<ConnectPosition> connectPositions, Entity owner, int laneIndex, TrackTypes trackTypes, out int index, out int laneGroupIndex, out int laneCount)
             {
@@ -1881,7 +2025,7 @@ namespace Traffic.Systems
             private void CreateRoundaboutCarLanes(int jobIndex, ref Unity.Mathematics.Random random, Entity owner, LaneBuffer laneBuffer, ref int prevLaneIndex, int nextLaneIndex, ref uint laneGroup, ConnectPosition prevMainPosition,
                 ConnectPosition nextMainPosition, NativeList<MiddleConnection> middleConnections, NativeList<ConnectPosition> sourceBuffer, NativeList<ConnectPosition> targetBuffer, NativeList<ConnectPosition> allTargets, ConnectPosition lane,
                 ConnectPosition dedicatedLane, CompositionFlags intersectionFlags, float3 middlePosition, float middleRadius, ref int laneCount, int totalLaneCount, int totalSourceCount, float spaceForLanes, RoadTypes roadPassThrough, bool isDeadEnd,
-                bool isTemp, Temp ownerTemp)
+                bool isTemp, Temp ownerTemp, /*NON-STOCK*/ DynamicBuffer<ModifiedLaneConnections> ringModifications, bool hasRingModifications)
             {
                 float2 @float = math.normalizesafe(prevMainPosition.m_Position.xz - middlePosition.xz);
                 float2 float2 = math.normalizesafe(nextMainPosition.m_Position.xz - middlePosition.xz);
@@ -2103,8 +2247,27 @@ namespace Traffic.Systems
                         int yield = math.select(0, 1, totalSourceCount >= 2);
                         isSkipped = false;
                         isUnsafe = true;
-                        for (int m = 0; m < num14; m++)
+                        /*NON-STOCK*/
+                        ulong modifiedEntrySources = 0;
+                        int createdEntryLanes = 0;
+                        NativeList<int3> customEntries = default;
+                        if (hasRingModifications)
                         {
+                            customEntries = new NativeList<int3>(4, Allocator.Temp);
+                            CollectRingEntries(ringModifications, isTemp, sourceBuffer, ref modifiedEntrySources, customEntries);
+                        }
+                        int entryCount = num14 + (customEntries.IsCreated ? customEntries.Length : 0);
+                        /*NON-STOCK-END*/
+                        for (int entryIndex = 0; entryIndex < entryCount; entryIndex++)
+                        {
+                            /*NON-STOCK*/
+                            bool isCustomEntry = entryIndex >= num14;
+                            int m = isCustomEntry ? customEntries[entryIndex - num14].y : entryIndex;
+                            if (m >= num14)
+                            {
+                                continue;
+                            }
+                            /*NON-STOCK-END*/
                             int num19 = math.select(m, num14 - m - 1, m_LeftHandTraffic);
                             float num20;
                             float rhs5;
@@ -2141,6 +2304,20 @@ namespace Traffic.Systems
                             {
                                 CommonUtils.Swap(ref a2, ref b2);
                             }
+                            /*NON-STOCK*/
+                            bool createEntryLane = true;
+                            if (isCustomEntry)
+                            {
+                                // custom connection: selected source lane -> lane of the ring
+                                index = customEntries[entryIndex - num14].x;
+                                flag6 = customEntries[entryIndex - num14].z != 0;
+                            }
+                            else if (index < 64 && (modifiedEntrySources & (1UL << index)) != 0)
+                            {
+                                // connections of the source lane have been modified, skip default
+                                createEntryLane = false;
+                            }
+                            /*NON-STOCK-END*/
                             ConnectPosition sourcePosition2 = sourceBuffer[index];
                             ConnectPosition targetPosition2 = connectPosition2;
                             PresetCurve(ref sourcePosition2, ref targetPosition2, middlePosition, centerPosition, float6, num20, 0f, num / (float)num2, 2f);
@@ -2149,9 +2326,10 @@ namespace Traffic.Systems
                             curve.m_Bezier = bezier4x2;
                             curve.m_Length = 1f;
                             curviness = NetUtils.CalculateStartCurviness(curve, m_NetLaneData[sourcePosition2.m_LaneData.m_Lane].m_Width);
-                            if ((sourcePosition2.m_RoadTypes & targetPosition2.m_RoadTypes) != 0)
+                            if (/*NON-STOCK*/ createEntryLane && (sourcePosition2.m_RoadTypes & targetPosition2.m_RoadTypes) != 0)
                             {
                                 flag7 |= ((sourcePosition2.m_LaneData.m_Flags & LaneFlags.Slave) != 0);
+                                createdEntryLanes++; /*NON-STOCK*/
                                 CreateNodeLane(jobIndex, ref nodeLaneIndex, ref random, ref curviness, ref isSkipped, owner, laneBuffer, middleConnections, sourcePosition2, targetPosition2, intersectionFlags, laneGroup, (ushort)num19, flag6,
                                     isForbidden: false, isTemp, trackOnly: false, yield, ownerTemp, isTurn: false, isRight: false, isGentle: false, isUTurn: false, isRoundabout: true, a2, b2, isMergeLeft: false, isMergeRight: false, fixedTangents: true,
                                     roadPassThrough);
@@ -2167,7 +2345,13 @@ namespace Traffic.Systems
                                 num18 = math.max(num18, math.distance(MathUtils.Position(bezier4x2, 0.5f).xz, middlePosition.xz));
                             }
                         }
-                        if (flag7)
+                        /*NON-STOCK*/
+                        if (customEntries.IsCreated)
+                        {
+                            customEntries.Dispose();
+                        }
+                        /*NON-STOCK-END*/
+                        if (flag7 && /*NON-STOCK*/ (!hasRingModifications || createdEntryLanes > 0))
                         {
                             float start = middleRadius + ((float)(totalLaneCount - math.max(num6, num12)) + 0.5f) * spaceForLanes / (float)totalLaneCount;
                             float end = middleRadius + ((float)(num12 - 1 + totalLaneCount - math.max(num6, num12)) + 0.5f) * spaceForLanes / (float)totalLaneCount;
@@ -2195,8 +2379,25 @@ namespace Traffic.Systems
                         int num22 = math.select(targetBuffer.Length, targetBuffer.Length + 1, num7 == targetBuffer.Length && dedicatedLane.m_LaneData.m_Lane != Entity.Null);
                         isSkipped = false;
                         isUnsafe = true;
-                        for (int n = 0; n < num22; n++)
+                        /*NON-STOCK*/
+                        ulong modifiedExitLanes = 0;
+                        int createdExitLanes = 0;
+                        NativeList<int3> customExits = default;
+                        if (hasRingModifications)
                         {
+                            customExits = new NativeList<int3>(4, Allocator.Temp);
+                            CollectRingExits(ringModifications, isTemp, nextMainPosition.m_Owner, targetBuffer, num13, ref modifiedExitLanes, customExits);
+                        }
+                        int exitCount = num22 + (customExits.IsCreated ? customExits.Length : 0);
+                        /*NON-STOCK-END*/
+                        for (int exitIndex = 0; exitIndex < exitCount; exitIndex++)
+                        {
+                            /*NON-STOCK*/
+                            bool isCustomExit = exitIndex >= num22;
+                            int n = isCustomExit ? customExits[exitIndex - num22].x : exitIndex;
+                            connectPosition.m_LaneData.m_Lane = lane.m_LaneData.m_Lane;
+                            connectPosition.m_RoadTypes = lane.m_RoadTypes;
+                            /*NON-STOCK-END*/
                             int num23 = math.select(n, num22 - n - 1, m_LeftHandTraffic);
                             int num24 = math.min(n, targetBuffer.Length - 1);
                             num24 = math.select(targetBuffer.Length - num24 - 1, num24, m_LeftHandTraffic);
@@ -2235,6 +2436,32 @@ namespace Traffic.Systems
                             {
                                 CommonUtils.Swap(ref a3, ref b3);
                             }
+                            /*NON-STOCK*/
+                            bool createExitLane = true;
+                            if (isCustomExit)
+                            {
+                                // custom connection: selected lane of the ring -> target lane
+                                int ringLane = customExits[exitIndex - num22].y;
+                                bool isDedicatedRingLane = dedicatedLane.m_LaneData.m_Lane != Entity.Null && ringLane == laneCount;
+                                ConnectPosition ringLanePosition = isDedicatedRingLane ? dedicatedLane : lane;
+                                rhs7 = isDedicatedRingLane ? middleRadius + num3 : middleRadius + ((float)ringLane + 0.5f) * spaceForLanes / (float)totalLaneCount;
+                                connectPosition.m_LaneData.m_Lane = ringLanePosition.m_LaneData.m_Lane;
+                                connectPosition.m_RoadTypes = ringLanePosition.m_RoadTypes;
+                                connectPosition.m_LaneData.m_Flags = (ringLanePosition.m_LaneData.m_Flags & (LaneFlags.Road | LaneFlags.Track | LaneFlags.PublicOnly | LaneFlags.HasAuxiliary | LaneFlags.BicyclesOnly));
+                                if (flag)
+                                {
+                                    connectPosition.m_LaneData.m_Flags |= LaneFlags.Slave;
+                                }
+                                connectPosition.m_Position.xz = middlePosition.xz + @float * rhs7;
+                                connectPosition.m_LaneData.m_Index = (byte)ringLane;
+                                flag6 = customExits[exitIndex - num22].z != 0;
+                            }
+                            else if (num25 < 64 && (modifiedExitLanes & (1UL << num25)) != 0)
+                            {
+                                // connections of the ring lane have been modified, skip default
+                                createExitLane = false;
+                            }
+                            /*NON-STOCK-END*/
                             ConnectPosition sourcePosition4 = connectPosition;
                             ConnectPosition targetPosition4 = targetBuffer[num24];
                             PresetCurve(ref sourcePosition4, ref targetPosition4, middlePosition, centerPosition, float6, falseValue, num / (float)num2, 0f, 2f);
@@ -2243,9 +2470,10 @@ namespace Traffic.Systems
                             curve.m_Bezier = bezier4x3;
                             curve.m_Length = 1f;
                             curviness = NetUtils.CalculateEndCurviness(curve, m_NetLaneData[targetPosition4.m_LaneData.m_Lane].m_Width);
-                            if ((sourcePosition4.m_RoadTypes & targetPosition4.m_RoadTypes) != 0)
+                            if (/*NON-STOCK*/ createExitLane && (sourcePosition4.m_RoadTypes & targetPosition4.m_RoadTypes) != 0)
                             {
                                 flag8 |= ((targetPosition4.m_LaneData.m_Flags & LaneFlags.Slave) != 0);
+                                createdExitLanes++; /*NON-STOCK*/
                                 CreateNodeLane(jobIndex, ref nodeLaneIndex, ref random, ref curviness, ref isSkipped, owner, laneBuffer, middleConnections, sourcePosition4, targetPosition4, intersectionFlags, laneGroup, (ushort)num23, flag6,
                                     isForbidden: false, isTemp, trackOnly: false, yield2, ownerTemp, isTurn: true, !m_LeftHandTraffic, isGentle: true, isUTurn: false, isRoundabout: true, a3, b3, flag6 && m_LeftHandTraffic, flag6 && !m_LeftHandTraffic,
                                     fixedTangents: true, roadPassThrough);
@@ -2261,7 +2489,15 @@ namespace Traffic.Systems
                                 num18 = math.max(num18, math.distance(MathUtils.Position(bezier4x3, 0.5f).xz, middlePosition.xz));
                             }
                         }
-                        if (flag8)
+                        /*NON-STOCK*/
+                        if (customExits.IsCreated)
+                        {
+                            customExits.Dispose();
+                        }
+                        connectPosition.m_LaneData.m_Lane = lane.m_LaneData.m_Lane;
+                        connectPosition.m_RoadTypes = lane.m_RoadTypes;
+                        /*NON-STOCK-END*/
+                        if (flag8 && /*NON-STOCK*/ (!hasRingModifications || createdExitLanes > 0))
                         {
                             float start2 = middleRadius + ((float)math.min(totalLaneCount - 1, math.max(0, totalLaneCount - num7)) + 0.5f) * spaceForLanes / (float)totalLaneCount;
                             float end2 = middleRadius + ((float)math.min(totalLaneCount - 1, num7 - 1 + math.max(0, totalLaneCount - num7)) + 0.5f) * spaceForLanes / (float)totalLaneCount;
@@ -2374,7 +2610,7 @@ namespace Traffic.Systems
                                     centerPosition2.xz += float7 * (num30 - num27);
                                     middleOffset = num30;
                                 }
-                                if ((sourcePosition6.m_RoadTypes & targetPosition6.m_RoadTypes) != 0)
+                                if ((sourcePosition6.m_RoadTypes & targetPosition6.m_RoadTypes) != 0 && /*NON-STOCK*/ IsRingBypassAllowed(ringModifications, hasRingModifications, isTemp, sourcePosition6.m_Owner, sourcePosition6.m_LaneData.m_Index, Helpers.RoundaboutUtils.EncodeEntry(targetPosition6.m_LaneData.m_Index, true)))
                                 {
                                     flag9 |= ((sourcePosition6.m_LaneData.m_Flags & LaneFlags.Slave) != 0);
                                     targetPosition6.m_Tangent = -targetPosition6.m_Tangent;
@@ -2405,7 +2641,7 @@ namespace Traffic.Systems
                                     centerPosition3.xz += float8 * (num30 - num27);
                                     middleOffset2 = num30;
                                 }
-                                if ((sourcePosition6.m_RoadTypes & targetPosition6.m_RoadTypes) != 0)
+                                if ((sourcePosition6.m_RoadTypes & targetPosition6.m_RoadTypes) != 0 && /*NON-STOCK*/ IsRingBypassAllowed(ringModifications, hasRingModifications, isTemp, targetPosition6.m_Owner, Helpers.RoundaboutUtils.EncodeExit(sourcePosition6.m_LaneData.m_Index, true), targetPosition6.m_LaneData.m_Index))
                                 {
                                     flag10 |= ((targetPosition6.m_LaneData.m_Flags & LaneFlags.Slave) != 0);
                                     PresetCurve(ref sourcePosition6, ref targetPosition6, middlePosition, centerPosition3, centerTangent2, middleOffset2, num * 0.5f / (float)num2, 0f, 2f);
