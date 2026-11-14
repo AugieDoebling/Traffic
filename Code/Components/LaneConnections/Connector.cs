@@ -13,6 +13,10 @@ namespace Traffic.Components.LaneConnections
         /// Connector on the roundabout ring only (see RoundaboutUtils): lane index of the path node owned by the node (lane | segment &lt;&lt; 8)
         /// </summary>
         public int pathLaneIndex;
+        /// <summary>
+        /// Connector on the roundabout ring only: identifier of the ring segment, ring lanes connect source with target of the same segment
+        /// </summary>
+        public int ringSegment;
         public int2 carriagewayAndGroupIndex;
         public float3 position;
         public float3 lanePosition;

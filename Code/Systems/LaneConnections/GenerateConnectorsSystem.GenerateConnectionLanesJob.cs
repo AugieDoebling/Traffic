@@ -33,6 +33,7 @@ namespace Traffic.Systems.LaneConnections
             [ReadOnly] public ComponentLookup<Node> nodeData;
             [ReadOnly] public ComponentLookup<Roundabout> roundaboutData;
             [ReadOnly] public ComponentLookup<Connector> connectorData;
+            [ReadOnly] public BufferLookup<RoundaboutRingPoint> ringPointBuffer;
             [ReadOnly] public BufferLookup<ConnectedEdge> connectedEdgesBuffer;
             [ReadOnly] public BufferLookup<NetCompositionLane> prefabCompositionLaneBuffer;
             [ReadOnly] public BufferLookup<SubLane> subLanesBuffer;
@@ -131,6 +132,92 @@ namespace Traffic.Systems.LaneConnections
             }
 
             /// <summary>
+            /// Adds a connection for the roundabout lane: entry (edge lane -> ring), exit (ring -> edge lane) or the lane running along the ring.
+            /// Identity of the lane end placed on the ring is read from ring points provided by the lane system,
+            /// the lane end which is not listed there is the middle point of the bypass lane
+            /// </summary>
+            private void AddRingConnection(Entity node, DynamicBuffer<RoundaboutRingPoint> ringPoints, SubLane subLane, Lane lane, Entity sourceEdge, Entity targetEdge, bool startOnRing, bool endOnRing, bool isUnsafe, bool isForbidden)
+            {
+                if (!startOnRing && !endOnRing)
+                {
+                    return;
+                }
+                Entity sourceEntity = sourceEdge;
+                Entity targetEntity = targetEdge;
+                int2 laneIndexMap = new int2(lane.m_StartNode.GetLaneIndex() & 0xff, lane.m_EndNode.GetLaneIndex() & 0xff);
+                float3x2 lanePositionMap = default;
+                int2 sourceCarriagewayAndGroup = int2.zero;
+                int2 targetCarriagewayAndGroup = int2.zero;
+                if (startOnRing)
+                {
+                    int pathLaneIndex = lane.m_StartNode.GetLaneIndex();
+                    if (!TryFindRingPoint(ringPoints, pathLaneIndex, true, out sourceEntity, out laneIndexMap.x))
+                    {
+                        if (endOnRing || targetEdge == Entity.Null)
+                        {
+                            return;
+                        }
+                        sourceEntity = targetEdge;
+                        laneIndexMap.x = Helpers.RoundaboutUtils.EncodeExit(pathLaneIndex, true);
+                    }
+                }
+                else if (sourceEdge == Entity.Null ||
+                    !Helpers.NetUtils.GetLaneEndDetails(sourceEdge, laneIndexMap.x, edgeData[sourceEdge].m_End.Equals(node), ref compositionData, ref prefabCompositionLaneBuffer, out lanePositionMap.c0, out sourceCarriagewayAndGroup))
+                {
+                    return;
+                }
+                if (endOnRing)
+                {
+                    int pathLaneIndex = lane.m_EndNode.GetLaneIndex();
+                    if (!TryFindRingPoint(ringPoints, pathLaneIndex, false, out targetEntity, out laneIndexMap.y))
+                    {
+                        if (startOnRing || sourceEdge == Entity.Null)
+                        {
+                            return;
+                        }
+                        targetEntity = sourceEdge;
+                        laneIndexMap.y = Helpers.RoundaboutUtils.EncodeEntry(pathLaneIndex, true);
+                    }
+                }
+                else if (targetEdge == Entity.Null ||
+                    !Helpers.NetUtils.GetLaneEndDetails(targetEdge, laneIndexMap.y, edgeData[targetEdge].m_End.Equals(node), ref compositionData, ref prefabCompositionLaneBuffer, out lanePositionMap.c1, out targetCarriagewayAndGroup))
+                {
+                    return;
+                }
+
+                if (sourceEntity != Entity.Null && targetEntity != Entity.Null &&
+                    connectorsList.TryGetValue(new NodeEdgeLaneKey(node.Index, sourceEntity.Index, laneIndexMap.x), out Entity sourceConnector))
+                {
+                    Connection connection = new Connection(lane, curveData[subLane.m_SubLane].m_Bezier, lanePositionMap, new int4(sourceCarriagewayAndGroup, targetCarriagewayAndGroup), subLane.m_PathMethods, sourceEntity, targetEntity, isUnsafe,
+                        isForbidden);
+                    connection.laneIndexMap = laneIndexMap;
+                    Entity e = commandBuffer.CreateEntity();
+                    DynamicBuffer<Connection> connectionsBuffer = commandBuffer.AddBuffer<Connection>(e);
+                    connectionsBuffer.Add(connection);
+                    Logger.DebugConnections($"Adding ring connection ({e}) n[{node}] idx[{lane.m_StartNode.GetLaneIndex()}->{lane.m_EndNode.GetLaneIndex()}] identity[{sourceEntity}:{laneIndexMap.x} -> {targetEntity}:{laneIndexMap.y}] | connector: {sourceConnector}");
+                    commandBuffer.AppendToBuffer(sourceConnector, new LaneConnection() { connection = e });
+                }
+            }
+
+            private static bool TryFindRingPoint(DynamicBuffer<RoundaboutRingPoint> ringPoints, int pathLaneIndex, bool isSource, out Entity edge, out int laneIndex)
+            {
+                for (int i = 0; i < ringPoints.Length; i++)
+                {
+                    RoundaboutRingPoint ringPoint = ringPoints[i];
+                    if (ringPoint.pathLaneIndex == pathLaneIndex && ringPoint.isSource == isSource)
+                    {
+                        edge = ringPoint.edge;
+                        laneIndex = ringPoint.laneIndex;
+                        return true;
+                    }
+                }
+                edge = Entity.Null;
+                laneIndex = -1;
+                return false;
+            }
+
+            /// <summary>
+            /// Fallback, used when ring points have not been provided by the lane system yet.
             /// Adds a connection for the roundabout entry lane (edge lane -> ring) or exit lane (ring -> edge lane).
             /// The lane end placed on the ring is owned by the node, see <see cref="Helpers.RoundaboutUtils"/>.
             /// Lanes running along the ring (both ends owned by the node) are skipped
@@ -139,6 +226,12 @@ namespace Traffic.Systems.LaneConnections
             {
                 bool startOnRing = sourceEdge == Entity.Null && Helpers.RoundaboutUtils.IsOwnedBy(lane.m_StartNode, node);
                 bool endOnRing = targetEdge == Entity.Null && Helpers.RoundaboutUtils.IsOwnedBy(lane.m_EndNode, node);
+                if (ringPointBuffer.TryGetBuffer(node, out DynamicBuffer<RoundaboutRingPoint> ringPoints) && !ringPoints.IsEmpty)
+                {
+                    // lane ends of the ring provided by the lane system, lanes running along the ring are supported
+                    AddRingConnection(node, ringPoints, subLane, lane, sourceEdge, targetEdge, startOnRing, endOnRing, isUnsafe, isForbidden);
+                    return;
+                }
                 if (startOnRing == endOnRing)
                 {
                     return;

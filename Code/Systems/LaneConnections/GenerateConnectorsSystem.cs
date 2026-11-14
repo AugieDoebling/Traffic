@@ -71,6 +71,7 @@ namespace Traffic.Systems.LaneConnections
                 subLanes = SystemAPI.GetBufferLookup<SubLane>(true),
                 prefabCompositionLanes = SystemAPI.GetBufferLookup<NetCompositionLane>(true),
                 roundaboutData = SystemAPI.GetComponentLookup<Roundabout>(true),
+                ringPointBuffer = SystemAPI.GetBufferLookup<RoundaboutRingPoint>(true),
                 commandBuffer = commandBuffer,
             };
             Logger.Debug($"Generating (def): {_definitionQuery.CalculateEntityCount()} | chunks: {_definitionQuery.CalculateChunkCount()}");
@@ -100,6 +101,7 @@ namespace Traffic.Systems.LaneConnections
                 nodeData = SystemAPI.GetComponentLookup<Node>(true),
                 roundaboutData = SystemAPI.GetComponentLookup<Roundabout>(true),
                 connectorData = SystemAPI.GetComponentLookup<Connector>(true),
+                ringPointBuffer = SystemAPI.GetBufferLookup<RoundaboutRingPoint>(true),
                 connectedEdgesBuffer = SystemAPI.GetBufferLookup<ConnectedEdge>(true),
                 prefabCompositionLaneBuffer= SystemAPI.GetBufferLookup<NetCompositionLane>(true),
                 subLanesBuffer = SystemAPI.GetBufferLookup<SubLane>(true),
@@ -128,6 +130,7 @@ namespace Traffic.Systems.LaneConnections
             public bool isRing;
             public int ringLaneIndex;
             public int pathLaneIndex;
+            public int ringSegment;
             // public ConnectionType supportedType;
         }
     }

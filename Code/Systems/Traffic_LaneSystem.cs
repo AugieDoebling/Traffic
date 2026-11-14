@@ -1107,6 +1107,8 @@ namespace Traffic.Systems
                                 {
                                     ConnectPosition roundaboutLane = default(ConnectPosition);
                                     ConnectPosition dedicatedLane = default(ConnectPosition);
+                                    /*NON-STOCK*/
+                                    NativeList<RoundaboutRingPoint> ringPoints = new NativeList<RoundaboutRingPoint>(16, Allocator.Temp);
                                     int laneCount = 0;
                                     uint laneGroup = 0u;
                                     float laneWidth = float.MaxValue;
@@ -1220,7 +1222,7 @@ namespace Traffic.Systems
                                         }
                                         CreateRoundaboutCarLanes(chunkIndex, ref random4, entity3, laneBuffer, ref prevLaneIndex, -1, ref laneGroup, connectPosition2, nextPosition2, middleConnections, tempSourceConnectPositions,
                                             tempTargetConnectPositions, targetNodeConnectPositions, roundaboutLane, dedicatedLane, intersectionFlags2, position, middleRadius2, ref laneCount3, laneCount, length, spaceForLanes, roadTypes, flag7,
-                                            tempComponents.Length != 0, ownerTemp3, /*NON-STOCK*/ ringModifications, hasRingModifications);
+                                            tempComponents.Length != 0, ownerTemp3, /*NON-STOCK*/ ringModifications, hasRingModifications, flag9, ringPoints);
                                         connectPosition2 = nextPosition2;
                                         flag9 = nextIsSource2;
                                         tempSourceConnectPositions.Clear();
@@ -1236,9 +1238,20 @@ namespace Traffic.Systems
                                     }
                                     CreateRoundaboutCarLanes(chunkIndex, ref random4, entity3, laneBuffer, ref prevLaneIndex, nextLaneIndex, ref laneGroup, connectPosition2, nextPosition, middleConnections, tempSourceConnectPositions,
                                         tempTargetConnectPositions, targetNodeConnectPositions, roundaboutLane, dedicatedLane, intersectionFlags2, position, middleRadius2, ref laneCount3, laneCount, length, spaceForLanes, roadTypes, flag7,
-                                        tempComponents.Length != 0, ownerTemp3, /*NON-STOCK*/ ringModifications, hasRingModifications);
+                                        tempComponents.Length != 0, ownerTemp3, /*NON-STOCK*/ ringModifications, hasRingModifications, flag9, ringPoints);
                                     tempSourceConnectPositions.Clear();
                                     tempTargetConnectPositions.Clear();
+                                    /*NON-STOCK*/
+#if EXPERIMENTAL_ROUNDABOUTS
+                                    if (tempComponents.Length == 0)
+                                    {
+                                        // lane ends of the ring for the Lane Connector tool
+                                        DynamicBuffer<RoundaboutRingPoint> ringPointBuffer = m_CommandBuffer.AddBuffer<RoundaboutRingPoint>(chunkIndex, entity3);
+                                        ringPointBuffer.CopyFrom(ringPoints.AsArray());
+                                    }
+#endif
+                                    ringPoints.Dispose();
+                                    /*NON-STOCK-END*/
                                 }
                             }
                             else
@@ -1677,6 +1690,40 @@ namespace Traffic.Systems
 
             /// <summary>
             /// NON-STOCK
+            /// Collects custom connections of lanes running along the roundabout ring within one ring segment:
+            /// (lane index at the start of the segment, lane index at the end of the segment, isUnsafe)
+            /// </summary>
+            private void CollectRingFlows(DynamicBuffer<ModifiedLaneConnections> modifications, bool isTemp, Entity sourceEdge, int sourceBase, int sourceCount, Entity targetEdge, int targetBase, int targetCount, ref ulong modifiedLanes,
+                NativeList<int3> results)
+            {
+                for (int i = 0; i < sourceCount; i++)
+                {
+                    if (!TryGetRingModifications(modifications, isTemp, sourceEdge, sourceBase | i, out DynamicBuffer<GeneratedConnection> connections, out bool hasConnections))
+                    {
+                        continue;
+                    }
+                    if (i < 64)
+                    {
+                        modifiedLanes |= 1UL << i;
+                    }
+                    if (!hasConnections)
+                    {
+                        continue;
+                    }
+                    for (int j = 0; j < connections.Length; j++)
+                    {
+                        GeneratedConnection connection = connections[j];
+                        int targetLane = connection.laneIndexMap.y & 0xff;
+                        if (connection.targetEntity == targetEdge && (connection.laneIndexMap.y & ~0xff) == targetBase && targetLane < targetCount)
+                        {
+                            results.Add(new int3(i, targetLane, connection.isUnsafe ? 1 : 0));
+                        }
+                    }
+                }
+            }
+
+            /// <summary>
+            /// NON-STOCK
             /// Collects custom roundabout entry connections of source lanes: (source index, ring lane index, isUnsafe)
             /// </summary>
             private void CollectRingEntries(DynamicBuffer<ModifiedLaneConnections> modifications, bool isTemp, NativeList<ConnectPosition> sourceBuffer, ref ulong modifiedSources, NativeList<int3> results)
@@ -2025,7 +2072,7 @@ namespace Traffic.Systems
             private void CreateRoundaboutCarLanes(int jobIndex, ref Unity.Mathematics.Random random, Entity owner, LaneBuffer laneBuffer, ref int prevLaneIndex, int nextLaneIndex, ref uint laneGroup, ConnectPosition prevMainPosition,
                 ConnectPosition nextMainPosition, NativeList<MiddleConnection> middleConnections, NativeList<ConnectPosition> sourceBuffer, NativeList<ConnectPosition> targetBuffer, NativeList<ConnectPosition> allTargets, ConnectPosition lane,
                 ConnectPosition dedicatedLane, CompositionFlags intersectionFlags, float3 middlePosition, float middleRadius, ref int laneCount, int totalLaneCount, int totalSourceCount, float spaceForLanes, RoadTypes roadPassThrough, bool isDeadEnd,
-                bool isTemp, Temp ownerTemp, /*NON-STOCK*/ DynamicBuffer<ModifiedLaneConnections> ringModifications, bool hasRingModifications)
+                bool isTemp, Temp ownerTemp, /*NON-STOCK*/ DynamicBuffer<ModifiedLaneConnections> ringModifications, bool hasRingModifications, bool prevIsSource, NativeList<RoundaboutRingPoint> ringPoints)
             {
                 float2 @float = math.normalizesafe(prevMainPosition.m_Position.xz - middlePosition.xz);
                 float2 float2 = math.normalizesafe(nextMainPosition.m_Position.xz - middlePosition.xz);
@@ -2146,12 +2193,76 @@ namespace Traffic.Systems
                     bool flag3 = k == 1 && sourceBuffer.Length >= 1;
                     bool flag4 = k == num2 && targetBuffer.Length >= 1;
                     bool flag5 = num2 == 1 && sourceBuffer.Length >= 1 && targetBuffer.Length >= 1;
+                    /*NON-STOCK*/
+                    // identities of lane ends of the ring segment (see Helpers.RoundaboutUtils):
+                    // sources of the last segment are shared with exit lanes, targets of the first segment with entry lanes
+                    Entity ringSourceEdge = flag4 ? nextMainPosition.m_Owner : prevMainPosition.m_Owner;
+                    int ringSourceBase = flag4 ? Helpers.RoundaboutUtils.EncodeExit(0) : Helpers.RoundaboutUtils.EncodeFlow(0, k - 1, prevIsSource, true);
+                    Entity ringTargetEdge = prevMainPosition.m_Owner;
+                    int ringTargetBase = flag3 ? Helpers.RoundaboutUtils.EncodeEntry(0) : Helpers.RoundaboutUtils.EncodeFlow(0, k, prevIsSource, false);
+                    // the short ring segment in front of the edge (between its exit and entry) carries only circulating traffic,
+                    // there is nothing useful to modify so its lane ends are not offered to the tool
+                    bool isRingSegmentInFrontOfEdge = !prevIsSource && sourceBuffer.Length == 0 && targetBuffer.Length == 0 && prevMainPosition.m_Owner == nextMainPosition.m_Owner;
+                    if (ringPoints.IsCreated && !isTemp && !isRingSegmentInFrontOfEdge)
+                    {
+                        int ringSegment = ((connectPosition.m_SegmentIndex << 8) | connectPosition2.m_SegmentIndex) + 1;
+                        bool hasDedicatedLane = dedicatedLane.m_LaneData.m_Lane != Entity.Null;
+                        for (int i = 0; i < num13; i++)
+                        {
+                            bool isDedicated = hasDedicatedLane && i == laneCount;
+                            float radius = isDedicated ? middleRadius + num3 : middleRadius + ((float)i + 0.5f) * spaceForLanes / (float)totalLaneCount;
+                            float2 direction = m_LeftHandTraffic ? MathUtils.Right(@float) : MathUtils.Left(@float);
+                            ringPoints.Add(new RoundaboutRingPoint
+                            {
+                                edge = ringSourceEdge,
+                                laneIndex = ringSourceBase | i,
+                                pathLaneIndex = (connectPosition.m_SegmentIndex << 8) | i,
+                                segment = ringSegment,
+                                position = new float3(middlePosition.x + @float.x * radius, middlePosition.y, middlePosition.z + @float.y * radius),
+                                direction = new float3(direction.x, 0f, direction.y),
+                                lanePrefab = isDedicated ? dedicatedLane.m_LaneData.m_Lane : lane.m_LaneData.m_Lane,
+                                isSource = true,
+                            });
+                        }
+                        for (int i = 0; i < num14; i++)
+                        {
+                            bool isDedicated = hasDedicatedLane && i == num12;
+                            float radius = isDedicated ? middleRadius + num3 : middleRadius + ((float)i + 0.5f) * spaceForLanes / (float)totalLaneCount;
+                            float2 direction = m_LeftHandTraffic ? MathUtils.Right(float4) : MathUtils.Left(float4);
+                            ringPoints.Add(new RoundaboutRingPoint
+                            {
+                                edge = ringTargetEdge,
+                                laneIndex = ringTargetBase | i,
+                                pathLaneIndex = (connectPosition2.m_SegmentIndex << 8) | i,
+                                segment = ringSegment,
+                                position = new float3(middlePosition.x + float4.x * radius, middlePosition.y, middlePosition.z + float4.y * radius),
+                                direction = new float3(direction.x, 0f, direction.y),
+                                lanePrefab = isDedicated ? dedicatedLane.m_LaneData.m_Lane : lane.m_LaneData.m_Lane,
+                                isSource = false,
+                            });
+                        }
+                    }
+                    /*NON-STOCK-END*/
                     float curviness = -1f;
                     bool flag6 = roadPassThrough != 0 || (isDeadEnd && (nextLaneIndex < 0 || flag3 || flag4));
                     bool isUnsafe = flag6;
                     bool isSkipped = false;
-                    for (int l = 0; l < num14; l++)
+                    /*NON-STOCK*/
+                    ulong modifiedRingLanes = 0;
+                    NativeList<int3> customRingLanes = default;
+                    if (hasRingModifications)
                     {
+                        customRingLanes = new NativeList<int3>(4, Allocator.Temp);
+                        CollectRingFlows(ringModifications, isTemp, ringSourceEdge, ringSourceBase, num13, ringTargetEdge, ringTargetBase, num14, ref modifiedRingLanes, customRingLanes);
+                    }
+                    int ringLaneCount = num14 + (customRingLanes.IsCreated ? customRingLanes.Length : 0);
+                    /*NON-STOCK-END*/
+                    for (int ringIndex = 0; ringIndex < ringLaneCount; ringIndex++)
+                    {
+                        /*NON-STOCK*/
+                        bool isCustomRingLane = ringIndex >= num14;
+                        int l = isCustomRingLane ? customRingLanes[ringIndex - num14].y : ringIndex;
+                        /*NON-STOCK-END*/
                         int num16 = math.select(l, num14 - l - 1, m_LeftHandTraffic);
                         int num17;
                         float rhs;
@@ -2176,6 +2287,32 @@ namespace Traffic.Systems
                             connectPosition.m_LaneData.m_Flags = (lane.m_LaneData.m_Flags & (LaneFlags.Road | LaneFlags.Track | LaneFlags.PublicOnly | LaneFlags.HasAuxiliary | LaneFlags.BicyclesOnly));
                             connectPosition2.m_LaneData.m_Flags = (lane.m_LaneData.m_Flags & (LaneFlags.Road | LaneFlags.Track | LaneFlags.PublicOnly | LaneFlags.HasAuxiliary | LaneFlags.BicyclesOnly));
                         }
+                        /*NON-STOCK*/
+                        bool createRingLane = true;
+                        bool ringLaneUnsafe = flag6;
+                        if (isCustomRingLane)
+                        {
+                            // custom connection: selected lane at the start of the ring segment -> lane at the end of the segment
+                            int ringSourceLane = customRingLanes[ringIndex - num14].x;
+                            bool isDedicatedSource = dedicatedLane.m_LaneData.m_Lane != Entity.Null && ringSourceLane == laneCount;
+                            ringLaneUnsafe |= customRingLanes[ringIndex - num14].z != 0;
+                            if ((l == num12) != isDedicatedSource)
+                            {
+                                // dedicated lane can be connected only with dedicated lane
+                                createRingLane = false;
+                            }
+                            else if (l != num12)
+                            {
+                                num17 = ringSourceLane;
+                                rhs = middleRadius + ((float)num17 + 0.5f) * spaceForLanes / (float)totalLaneCount;
+                            }
+                        }
+                        else if (num17 < 64 && (modifiedRingLanes & (1UL << num17)) != 0)
+                        {
+                            // connections of the ring lane have been modified, skip default
+                            createRingLane = false;
+                        }
+                        /*NON-STOCK-END*/
                         connectPosition.m_Position.xz = middlePosition.xz + @float * rhs;
                         connectPosition.m_LaneData.m_Index = (byte)num17;
                         if (flag)
@@ -2194,7 +2331,12 @@ namespace Traffic.Systems
                         {
                             CommonUtils.Swap(ref a, ref b);
                         }
-                        if (l < num12 && num17 != l)
+                        /*NON-STOCK*/
+                        if (!createRingLane)
+                        {
+                            // connections of the ring lane have been modified, skip
+                        }
+                        else /*NON-STOCK-END*/ if (l < num12 && num17 != l)
                         {
                             ConnectPosition sourcePosition = connectPosition;
                             ConnectPosition targetPosition = connectPosition2;
@@ -2203,13 +2345,13 @@ namespace Traffic.Systems
                             Bezier4x3 bezier4x = NetUtils.FitCurve(sourcePosition.m_Position, sourcePosition.m_Tangent, -targetPosition.m_Tangent, position);
                             sourcePosition.m_Tangent = bezier4x.b - bezier4x.a;
                             targetPosition.m_Tangent = MathUtils.Normalize(targetPosition.m_Tangent, targetPosition.m_Tangent.xz);
-                            CreateNodeLane(jobIndex, ref nodeLaneIndex, ref random, ref curviness, ref isSkipped, owner, laneBuffer, middleConnections, sourcePosition, targetPosition, intersectionFlags, laneGroup, (ushort)num16, flag6, isForbidden: false,
+                            CreateNodeLane(jobIndex, ref nodeLaneIndex, ref random, ref curviness, ref isSkipped, owner, laneBuffer, middleConnections, sourcePosition, targetPosition, intersectionFlags, laneGroup, (ushort)num16, /*NON-STOCK*/ ringLaneUnsafe, isForbidden: false,
                                 isTemp, trackOnly: false, 0, ownerTemp, isTurn: false, isRight: false, isGentle: false, isUTurn: false, isRoundabout: true, a, b, isMergeLeft: false, isMergeRight: false, fixedTangents: true, roadPassThrough);
                         }
                         else
                         {
                             curviness = -1f;
-                            CreateNodeLane(jobIndex, ref nodeLaneIndex, ref random, ref curviness, ref isSkipped, owner, laneBuffer, middleConnections, connectPosition, connectPosition2, intersectionFlags, laneGroup, (ushort)num16, flag6,
+                            CreateNodeLane(jobIndex, ref nodeLaneIndex, ref random, ref curviness, ref isSkipped, owner, laneBuffer, middleConnections, connectPosition, connectPosition2, intersectionFlags, laneGroup, (ushort)num16, /*NON-STOCK*/ ringLaneUnsafe,
                                 isForbidden: false, isTemp, trackOnly: false, 0, ownerTemp, isTurn: false, isRight: false, isGentle: false, isUTurn: false, isRoundabout: true, a, b, isMergeLeft: false, isMergeRight: false, fixedTangents: false,
                                 roadPassThrough);
                         }
@@ -2221,6 +2363,12 @@ namespace Traffic.Systems
                             connectPosition2.m_RoadTypes = lane.m_RoadTypes;
                         }
                     }
+                    /*NON-STOCK*/
+                    if (customRingLanes.IsCreated)
+                    {
+                        customRingLanes.Dispose();
+                    }
+                    /*NON-STOCK-END*/
                     if (!isTemp && (flag || flag2))
                     {
                         float rhs3 = middleRadius + (float)laneCount * 0.5f * spaceForLanes / (float)totalLaneCount;

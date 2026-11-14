@@ -1030,6 +1030,7 @@ namespace Traffic.Tools
                 SelectIntersectionNodeJob selectNodeJob = new SelectIntersectionNodeJob
                 {
                     elevationData = SystemAPI.GetComponentLookup<Elevation>(true),
+                    roundaboutData = SystemAPI.GetComponentLookup<Roundabout>(true),
                     upgradedData = SystemAPI.GetComponentLookup<Upgraded>(true),
                     edgeData = SystemAPI.GetComponentLookup<Edge>(true),
                     modifiedConnectionsData = SystemAPI.GetComponentLookup<ModifiedConnections>(true),

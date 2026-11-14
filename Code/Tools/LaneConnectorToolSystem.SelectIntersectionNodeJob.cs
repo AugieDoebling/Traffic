@@ -20,6 +20,7 @@ namespace Traffic.Tools
         private struct SelectIntersectionNodeJob : IJob
         {
             [ReadOnly] public ComponentLookup<Elevation> elevationData;
+            [ReadOnly] public ComponentLookup<Roundabout> roundaboutData;
             [ReadOnly] public ComponentLookup<Upgraded> upgradedData;
             [ReadOnly] public ComponentLookup<Edge> edgeData;
             [ReadOnly] public ComponentLookup<ModifiedConnections> modifiedConnectionsData;
@@ -44,6 +45,13 @@ namespace Traffic.Tools
                 {
                     commandBuffer.AddComponent(node, in modifiedConnectionsTypeSet);
                 }
+#if EXPERIMENTAL_ROUNDABOUTS
+                if (roundaboutData.HasComponent(node))
+                {
+                    // regenerate lanes of the roundabout: the lane system provides lane ends of the ring required to build connectors
+                    commandBuffer.AddComponent<Updated>(node);
+                }
+#endif
 
                 if (connectedEdgeBuffer.HasBuffer(node))
                 {

@@ -203,7 +203,9 @@ namespace Traffic.Systems.Serialization
 
                     bool isRingSource = Helpers.RoundaboutUtils.IsRing(generatedConnection.laneIndexMap.x);
                     bool isRingTarget = Helpers.RoundaboutUtils.IsRing(generatedConnection.laneIndexMap.y);
-                    if (isRoundabout ? (isRingSource == isRingTarget || generatedConnection.sourceEntity != generatedConnection.targetEntity) : (isRingSource || isRingTarget))
+                    if (isRoundabout
+                            ? ((!isRingSource && !isRingTarget) || (isRingSource != isRingTarget && generatedConnection.sourceEntity != generatedConnection.targetEntity))
+                            : (isRingSource || isRingTarget))
                     {
                         Logger.Serialization($"Lane indexes {generatedConnection.laneIndexMap} not valid, roundabout: {isRoundabout}! {modifiedConnection.modifiedConnections}[{i}] - {generatedConnection.targetEntity}. Reset all connections at {nodeEntity}");
                         return false;
