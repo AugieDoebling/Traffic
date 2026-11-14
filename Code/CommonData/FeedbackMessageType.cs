@@ -8,6 +8,7 @@
         WarnResetPrioritiesRoundaboutApply,
         WarnResetPrioritiesChangeApply,
         WarnRoadBuilderApply,
+        WarnResetLaneConnectionsRoundaboutChange,
         ErrorLaneConnectorNotSupported,
         ErrorPrioritiesNotSupported,
         ErrorPrioritiesRemoveTrafficLights,

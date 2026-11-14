@@ -52,6 +52,7 @@ namespace Traffic.Rendering
                             if ((toolFeedbackInfo.type == FeedbackMessageType.WarnForbiddenTurnApply || 
                                 toolFeedbackInfo.type == FeedbackMessageType.WarnResetPrioritiesTrafficLightsApply ||
                                 toolFeedbackInfo.type == FeedbackMessageType.WarnResetPrioritiesRoundaboutApply||
+                                toolFeedbackInfo.type == FeedbackMessageType.WarnResetLaneConnectionsRoundaboutChange ||
                                 toolFeedbackInfo.type == FeedbackMessageType.WarnResetPrioritiesChangeApply) &&
                                 nodeChunkData.Length > 0)
                             {

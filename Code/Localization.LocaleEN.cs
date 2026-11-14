@@ -172,6 +172,7 @@ namespace Traffic
                     { GetToolTooltipLocaleID("FeedbackMessage", nameof(FeedbackMessageType.WarnResetPrioritiesTrafficLightsApply)), "[Traffic] Applying Traffic Lights upgrade will reset Priority settings at the selected intersection"},
                     { GetToolTooltipLocaleID("FeedbackMessage", nameof(FeedbackMessageType.WarnResetPrioritiesRoundaboutApply)), "[Traffic] Applying Roundabout upgrade will reset Priority settings at the selected intersection"},
                     { GetToolTooltipLocaleID("FeedbackMessage", nameof(FeedbackMessageType.WarnResetPrioritiesChangeApply)), "[Traffic] Applying the change reset Priority settings at the selected intersection"},
+                    { GetToolTooltipLocaleID("FeedbackMessage", nameof(FeedbackMessageType.WarnResetLaneConnectionsRoundaboutChange)), "[Traffic] Adding or removing the Roundabout upgrade will reset Lane connections at the selected intersection"},
                     { GetToolTooltipLocaleID("FeedbackMessage", nameof(FeedbackMessageType.WarnRoadBuilderApply)), "[Traffic] Selecting this segment with Road Builder mod will reset Traffic settings at nearby intersections"},
 
                     { GetToolTooltipLocaleID("FeedbackMessage", nameof(FeedbackMessageType.ErrorHasRoundabout)), "[Traffic] Modifying lane connections at intersection with roundabout is not supported" },

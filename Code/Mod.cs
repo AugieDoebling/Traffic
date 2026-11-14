@@ -77,6 +77,9 @@ namespace Traffic
             updateSystem.UpdateBefore<TrafficLaneSystem, LaneSystem>(SystemUpdatePhase.Modification4);
             updateSystem.UpdateBefore<SyncCustomLaneConnectionsSystem, TrafficLaneSystem>(SystemUpdatePhase.Modification4);
             updateSystem.UpdateBefore<SyncCustomPrioritiesSystem, TrafficLaneSystem>(SystemUpdatePhase.Modification4);
+#if EXPERIMENTAL_ROUNDABOUTS
+            updateSystem.UpdateBefore<Traffic.Systems.LaneConnections.RoundaboutConnectionsCleanupSystem, TrafficLaneSystem>(SystemUpdatePhase.Modification4);
+#endif
             
             /*data migration - requires NetCompositions to work correctly - not possible to run in SystemUpdatePhase.Deserialize */
             updateSystem.UpdateBefore<TrafficDataMigrationSystem, SyncCustomLaneConnectionsSystem>(SystemUpdatePhase.Modification4);

@@ -134,15 +134,34 @@ namespace Traffic.Tools
                                     // check node composition if is roundabout (node is start or end of connectedEdge),
                                     // "Edge" entity holds info about network Composition (edge, startNode, endNode)
 
+#if EXPERIMENTAL_ROUNDABOUTS
+                                    // placing the roundabout object marks the node as Regenerate, not Essential
+                                    if ((temp.m_Flags & (TempFlags.Essential | TempFlags.Regenerate)) != 0)
+#else
                                     if ((temp.m_Flags & TempFlags.Essential) != 0)
+#endif
                                     {
                                         Edge edge = edgeData[connectedEdge.m_Edge];
-                                        bool hasPriorities = lanePriorityBuffer.HasBuffer(connectedEdge.m_Edge);
+                                        bool hasPriorities = lanePriorityBuffer.HasBuffer(connectedEdge.m_Edge) && (temp.m_Flags & TempFlags.Essential) != 0;
                                         bool? isStartNode = math.any(new bool2(edge.m_Start.Equals(entity), edge.m_End.Equals(entity))) ? edge.m_Start.Equals(entity) : null;
                                         if (isStartNode.HasValue && compositionData.HasComponent(connectedEdge.m_Edge))
                                         {
                                             Composition composition = compositionData[connectedEdge.m_Edge];
                                             CompositionFlags compositionFlags = netCompositionData[isStartNode.Value ? composition.m_StartNode : composition.m_EndNode].m_Flags;
+#if EXPERIMENTAL_ROUNDABOUTS
+                                            if (temp.m_Original != Entity.Null && IsRoundaboutChanged(connectedEdge.m_Edge, isStartNode.Value, compositionFlags))
+                                            {
+                                                // stored lane connections cannot be converted, will be removed (see SyncConnectionsJob)
+                                                if (numConnections > 0)
+                                                {
+                                                    feedbackInfos.Add(new ToolFeedbackInfo() { container = entity, type = FeedbackMessageType.WarnResetLaneConnectionsRoundaboutChange });
+                                                }
+                                            }
+                                            else if ((compositionFlags.m_General & CompositionFlags.General.Roundabout) != 0 && temp.m_Original != Entity.Null)
+                                            {
+                                                // roundabout, nothing has changed
+                                            }
+#else
                                             if ((compositionFlags.m_General & CompositionFlags.General.Roundabout) != 0 && temp.m_Original != Entity.Null)
                                             {
                                                 if (tempData.HasComponent(connectedEdge.m_Edge))
@@ -173,6 +192,7 @@ namespace Traffic.Tools
                                                 feedbackInfos.Add(new ToolFeedbackInfo() { type = FeedbackMessageType.ErrorApplyRoundabout });
                                                 hasFeedbackError = true;
                                             }
+#endif
                                             else if (hasPriorities &&
                                                 (compositionFlags.m_General & CompositionFlags.General.TrafficLights) != 0 && temp.m_Original != Entity.Null)
                                             {
@@ -285,6 +305,22 @@ namespace Traffic.Tools
                 }
 
                 feedbackInfos.Dispose();
+            }
+
+            /// <summary>
+            /// Tests if the roundabout upgrade has been added to or removed from the node of the temp edge
+            /// </summary>
+            private bool IsRoundaboutChanged(Entity edge, bool isStartNode, CompositionFlags nodeCompositionFlags)
+            {
+                if (!tempData.TryGetComponent(edge, out Temp tempEdge) ||
+                    (tempEdge.m_Flags & TempFlags.Delete) != 0 ||
+                    !compositionData.HasComponent(tempEdge.m_Original))
+                {
+                    return false;
+                }
+                Composition originalComposition = compositionData[tempEdge.m_Original];
+                CompositionFlags originalFlags = netCompositionData[isStartNode ? originalComposition.m_StartNode : originalComposition.m_EndNode].m_Flags;
+                return ((originalFlags.m_General ^ nodeCompositionFlags.m_General) & CompositionFlags.General.Roundabout) != 0;
             }
 
             private bool CheckEditIntersection(Entity entity, Entity nodeEntity, Temp temp, ref NativeList<ToolFeedbackInfo> feedbackInfos)

@@ -76,6 +76,8 @@ namespace Traffic.Systems.LaneConnections
                     {
                         EdgeIterator edgeIterator = new EdgeIterator(Entity.Null, entity, connectedEdgeBuffer, edgeData, tempData, hiddenData, false);
                         NativeHashMap<Entity, EdgeInfo> edgeMap = new NativeHashMap<Entity, EdgeInfo>(4, Allocator.Temp);
+                        // roundabout upgrade added or removed: lanes are generated in a different way, stored connections cannot be converted
+                        bool roundaboutChanged = false;
                         Logger.DebugConnectionsSync($"======= Iterating edges of {entity} =======");
                         while (edgeIterator.GetNext(out EdgeIteratorValue edgeValue))
                         {
@@ -111,6 +113,13 @@ namespace Traffic.Systems.LaneConnections
                                     LogCompositionData($"\n\tOriginal Edge Composition {tempEdge.m_Original}", originalComposition.m_Edge, originalComposition.m_StartNode, originalComposition.m_EndNode);
 #endif
                                     compositionChanged = CheckComposition(entity, temp.m_Original, originalEdge, originalComposition, edgeValue.m_Edge, composition, !edgeValue.m_End, (tempEdge.m_Flags & TempFlags.Modify) != 0);
+                                    Edge originalEdgeData = edgeData[originalEdge];
+                                    if (originalEdgeData.m_Start == temp.m_Original || originalEdgeData.m_End == temp.m_Original)
+                                    {
+                                        Entity originalNodeComposition = originalEdgeData.m_Start == temp.m_Original ? originalComposition.m_StartNode : originalComposition.m_EndNode;
+                                        Entity tempNodeComposition = !edgeValue.m_End ? composition.m_StartNode : composition.m_EndNode;
+                                        roundaboutChanged |= ((netCompositionData[originalNodeComposition].m_Flags.m_General ^ netCompositionData[tempNodeComposition].m_Flags.m_General) & CompositionFlags.General.Roundabout) != 0;
+                                    }
                                     if (math.all(!compositionChanged))
                                     {
                                         /*assume old and current edge has the same direction (would have the same EdgeIterator m_End value) */
@@ -167,6 +176,19 @@ namespace Traffic.Systems.LaneConnections
                             DataTemp newModifiedConnectionTemp = new DataTemp(connection.modifiedConnections, 0);
                             commandBuffer.AddComponent<DataOwner>(index, genEntity, new DataOwner(entity));
                             commandBuffer.AddComponent<PrefabRef>(index, genEntity, new PrefabRef(fakePrefabRef));
+                            if (roundaboutChanged)
+                            {
+                                newModifiedConnections.Add(new ModifiedLaneConnections()
+                                {
+                                    edgeEntity = connection.edgeEntity,
+                                    laneIndex = connection.laneIndex,
+                                    modifiedConnections = genEntity,
+                                });
+                                newModifiedConnectionTemp.flags |= TempFlags.Delete;
+                                commandBuffer.AddComponent<DataTemp>(index, genEntity, newModifiedConnectionTemp);
+                                Logger.DebugConnectionsSync($"Roundabout upgrade changed! Delete connections {entity}({temp.m_Original})[{connection.edgeEntity}]");
+                                continue;
+                            }
                             if (edgeMap.TryGetValue(connection.edgeEntity, out EdgeInfo newEdgeInfo))
                             {
                                 if (!(newEdgeInfo.isStart ? newEdgeInfo.compositionChanged.x : newEdgeInfo.compositionChanged.y))
@@ -455,8 +477,8 @@ namespace Traffic.Systems.LaneConnections
                         CompositionFlags.Side tNLeft = tNCompositionData.m_Flags.m_Left & importantFlags;
                         CompositionFlags.Side tNRight = tNCompositionData.m_Flags.m_Right & importantFlags;
                         
-                        // force composition changed result on roundabout
-                        if ((tNCompositionData.m_Flags.m_General & CompositionFlags.General.Roundabout) != 0)
+                        // force composition changed result when the roundabout upgrade has been added or removed
+                        if (((tNCompositionData.m_Flags.m_General ^ oNCompositionData.m_Flags.m_General) & CompositionFlags.General.Roundabout) != 0)
                         {
                             Logger.DebugConnectionsSync($"|CheckComposition| Temp node is Roundabout!, force composition change result");
                             return true;
